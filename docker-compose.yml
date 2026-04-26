@@ -1,0 +1,121 @@
+name: farm
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-farm}
+      POSTGRES_USER: ${POSTGRES_USER:-farm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farm}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-farm}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    image: farm-server:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-farm}
+      POSTGRES_USER: ${POSTGRES_USER:-farm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farm}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      FARM_API_TOKEN: ${FARM_API_TOKEN:-change-me-please}
+      FARM_HOST: 0.0.0.0
+      FARM_PORT: 5000
+      FARM_CONFIG: /app/config.yml
+      FARM_CORS_ORIGINS: ${FARM_CORS_ORIGINS:-*}
+      FARM_ROLE: api
+    command: ["uvicorn", "farm.main:app", "--host", "0.0.0.0", "--port", "5000"]
+    volumes:
+      - ./config.yml:/app/config.yml
+      - ./server/farm:/app/farm   # convenient for hot-reload during dev
+    ports:
+      - "5000:5000"
+
+  submitter:
+    image: farm-server:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      server:
+        condition: service_started
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-farm}
+      POSTGRES_USER: ${POSTGRES_USER:-farm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farm}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      FARM_CONFIG: /app/config.yml
+      FARM_ROLE: submitter
+    command: ["python", "-m", "farm.workers.submitter"]
+    volumes:
+      - ./config.yml:/app/config.yml
+      - ./server/farm:/app/farm
+
+  expirer:
+    image: farm-server:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server:
+        condition: service_started
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-farm}
+      POSTGRES_USER: ${POSTGRES_USER:-farm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farm}
+      FARM_CONFIG: /app/config.yml
+      FARM_ROLE: expirer
+    command: ["python", "-m", "farm.workers.expirer"]
+    volumes:
+      - ./config.yml:/app/config.yml
+      - ./server/farm:/app/farm
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:5000}
+        VITE_WS_BASE: ${VITE_WS_BASE:-ws://localhost:5000}
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - server
+
+volumes:
+  pgdata:

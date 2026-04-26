@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "farm-cli"
+version = "0.1.0"
+description = "Farm client — runs CTF exploits and ships their output to the farm."
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.28.1,<0.29",
+  "click>=8.3,<9",
+  "rich>=15.0,<16",
+  "websockets>=16.0,<17",
+  "pyyaml>=6.0.3,<7",
+]
+
+[project.scripts]
+farm-cli = "farm_cli.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["farm_cli*"]

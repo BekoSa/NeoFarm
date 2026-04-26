@@ -1,0 +1,53 @@
+# =============================================================================
+# Farm configuration. Hot-reloadable via the UI / API; restarts not required.
+# =============================================================================
+
+# Regex used to extract a flag from arbitrary exploit stdout.
+# Examples: Forcad/RuCTF default looks like "ABCDEFG12345...="
+flag_format: "[A-Z0-9]{31}="
+
+# Flag time-to-live, seconds. Older unsubmitted flags are marked EXPIRED.
+flag_lifetime: 900
+
+# Round duration, seconds. Used by clients to schedule exploit launches.
+round_length: 60
+
+# Submission protocol used to send flags to the jury.
+# Must match one of the modules under server/protocols/ (file stem).
+protocol: dummy
+
+# Per-protocol settings. Each key here is forwarded to that protocol's
+# constructor as **kwargs.
+protocols:
+  forcad:
+    # Forcad accepts JSON-array submissions over HTTP.
+    url: "http://10.10.10.10:8080/flags"
+    team_token: "PUT-YOUR-TEAM-TOKEN-HERE"
+
+  faustctf:
+    host: "submission.faustctf.example"
+    port: 31337
+    team_token: ""
+
+  ructf:
+    url: "http://monitor.ructf.example/flag"
+    team_token: ""
+
+  dummy:
+    # Marks every received flag as ACCEPTED with a fake response. Useful for
+    # local testing without a real jury.
+    accept_rate: 1.0
+
+# Flag submission throttle. The submitter will collect up to `batch_size`
+# flags and call the protocol no more often than `period` seconds.
+submitter:
+  period: 5            # seconds between submission rounds
+  batch_size: 100      # max flags per submission call
+
+# Teams. The CLI looks up a team's IP by alias; flags are tagged with the
+# team alias they were stolen from for nicer stats.
+teams:
+  - alias: team-1
+    ip: 10.60.1.2
+  - alias: team-2
+    ip: 10.60.2.2
