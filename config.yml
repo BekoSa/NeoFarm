@@ -42,6 +42,7 @@ protocols:
 # flags and call the protocol no more often than `period` seconds.
 submitter:
   period: 5            # seconds between submission rounds
+  idle_period: 0.5     # backoff when the queue is empty
   batch_size: 100      # max flags per submission call
 
 # Teams. The CLI looks up a team's IP by alias; flags are tagged with the

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { buildApi, Profile, StatsBucket, StatsOut } from "../api/client";
+import { Profile, StatsBucket, StatsOut, useApi } from "../api/client";
 import { Card } from "../components/Card";
 import { subscribe, FarmEvent } from "../api/ws";
 
 export function Dashboard({ profile }: { profile: Profile }) {
-  const api = buildApi(profile);
+  const api = useApi(profile);
   const stats = useQuery({
     queryKey: ["stats", profile.url],
     queryFn: async () => (await api.get<StatsOut>("/api/stats")).data,

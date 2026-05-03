@@ -38,6 +38,7 @@ from .runner import fan_out, parse_extra_args
 console = Console()
 log = logging.getLogger("farm.cli")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 def _async(coro_func):
@@ -66,6 +67,7 @@ async def login(url: str, token: str) -> None:
     async with FarmClient(p) as client:
         try:
             await client.health()
+            await client.get_config()
         except httpx.HTTPError as exc:
             console.print(f"[red]could not reach {url}: {exc}[/red]")
             sys.exit(1)
@@ -199,6 +201,7 @@ async def run(
             sys.exit(2)
 
         round_length = cfg.get("round_length", 60)
+        flag_format = cfg.get("flag_format", r"[A-Z0-9]{31}=")
         eff_timeout = timeout if timeout is not None else max(5.0, round_length - 5)
 
         round_idx = 0
@@ -217,6 +220,7 @@ async def run(
                     timeout=eff_timeout,
                     parallelism=parallelism,
                     extra_args=parse_extra_args(extra_args),
+                    flag_format=flag_format,
                     farm=client,
                 )
             except Exception:

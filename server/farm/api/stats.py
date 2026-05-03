@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends
@@ -13,6 +14,27 @@ from ..db import get_session
 from ..deps import require_token
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+
+_STATUS_FIELD = {
+    models.FlagStatus.ACCEPTED.value: "accepted",
+    models.FlagStatus.REJECTED.value: "rejected",
+    models.FlagStatus.QUEUED.value: "queued",
+    models.FlagStatus.PENDING.value: "queued",
+    models.FlagStatus.EXPIRED.value: "expired",
+    models.FlagStatus.DUPLICATE.value: "duplicate",
+    models.FlagStatus.ERROR.value: "error",
+}
+
+
+def _empty_counts() -> dict[str, int]:
+    return {
+        "accepted": 0,
+        "rejected": 0,
+        "queued": 0,
+        "expired": 0,
+        "duplicate": 0,
+        "error": 0,
+    }
 
 
 def _bucket_columns():
@@ -45,13 +67,20 @@ def _to_bucket(label: str, row) -> schemas.StatsBucket:
     )
 
 
+def _counts_to_bucket(label: str, counts: dict[str, int]) -> schemas.StatsBucket:
+    return schemas.StatsBucket(label=label, **counts)
+
+
+def _add_count(counts: dict[str, int], status: str, count: int) -> None:
+    field = _STATUS_FIELD.get(status)
+    if field is not None:
+        counts[field] += count
+
+
 @router.get("", response_model=schemas.StatsOut, dependencies=[Depends(require_token)])
 async def stats(sess: AsyncSession = Depends(get_session)) -> schemas.StatsOut:
     cols = _bucket_columns()
     now = datetime.now(UTC)
-
-    totals_row = (await sess.execute(select(*cols))).one()
-    totals = _to_bucket("total", totals_row)
 
     minute_row = (
         await sess.execute(
@@ -67,22 +96,37 @@ async def stats(sess: AsyncSession = Depends(get_session)) -> schemas.StatsOut:
     ).one()
     last_hour = _to_bucket("1h", hour_row)
 
-    by_sploit_rows = (
+    summary_rows = (
         await sess.execute(
-            select(models.Flag.sploit, *cols).group_by(models.Flag.sploit)
+            select(
+                models.Flag.sploit,
+                models.Flag.team,
+                models.Flag.status,
+                func.count().label("count"),
+            ).group_by(models.Flag.sploit, models.Flag.team, models.Flag.status)
         )
     ).all()
+
+    totals_counts = _empty_counts()
+    sploit_counts: dict[str, dict[str, int]] = defaultdict(_empty_counts)
+    team_counts: dict[str, dict[str, int]] = defaultdict(_empty_counts)
+
+    for row in summary_rows:
+        count = int(row.count or 0)
+        status = str(row.status)
+        _add_count(totals_counts, status, count)
+        _add_count(sploit_counts[row.sploit or "unknown"], status, count)
+        _add_count(team_counts[row.team or "unknown"], status, count)
+
+    totals = _counts_to_bucket("total", totals_counts)
     by_sploit = [
-        _to_bucket(r.sploit or "unknown", r) for r in by_sploit_rows
+        _counts_to_bucket(label, counts) for label, counts in sploit_counts.items()
     ]
     by_sploit.sort(key=lambda b: b.accepted + b.rejected, reverse=True)
 
-    by_team_rows = (
-        await sess.execute(
-            select(models.Flag.team, *cols).group_by(models.Flag.team)
-        )
-    ).all()
-    by_team = [_to_bucket(r.team or "unknown", r) for r in by_team_rows]
+    by_team = [
+        _counts_to_bucket(label, counts) for label, counts in team_counts.items()
+    ]
     by_team.sort(key=lambda b: b.accepted + b.rejected, reverse=True)
 
     return schemas.StatsOut(

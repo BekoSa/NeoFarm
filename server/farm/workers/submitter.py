@@ -16,11 +16,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import bindparam, select, update
 
-from ..config import get_config, reload_config
+from ..config import FarmConfig, reload_config
 from ..db import init_db, session_scope
 from ..models import Flag, FlagStatus
 from ..protocols import build_protocol
@@ -28,6 +29,7 @@ from ..protocols.base import FlagVerdict
 
 log = logging.getLogger("farm.submitter")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 _VERDICT_MAP = {
@@ -35,6 +37,21 @@ _VERDICT_MAP = {
     FlagVerdict.REJECTED: FlagStatus.REJECTED,
     FlagVerdict.ERROR: FlagStatus.ERROR,
 }
+
+_NON_RETRYABLE_HTTP = (400, 401, 403, 404)
+_APPLY_CHUNK_SIZE = 1000
+
+
+def _is_retryable_error(response: str) -> bool:
+    text = (response or "").lower()
+    if any(f"http {code}" in text for code in _NON_RETRYABLE_HTTP):
+        return False
+    return True
+
+
+def _chunks(rows: list[dict[str, object]], size: int) -> Iterator[list[dict[str, object]]]:
+    for i in range(0, len(rows), size):
+        yield rows[i : i + size]
 
 
 async def _claim_batch(batch_size: int) -> list[Flag]:
@@ -50,8 +67,11 @@ async def _claim_batch(batch_size: int) -> list[Flag]:
         if not rows:
             return []
         ids = [f.id for f in rows]
+        now = datetime.now(UTC)
         await sess.execute(
-            update(Flag).where(Flag.id.in_(ids)).values(status=FlagStatus.PENDING)
+            update(Flag)
+            .where(Flag.id.in_(ids))
+            .values(status=FlagStatus.PENDING, submitted_at=now)
         )
         # Detach so the caller can read attributes after the session closes.
         for f in rows:
@@ -60,18 +80,47 @@ async def _claim_batch(batch_size: int) -> list[Flag]:
 
 
 async def _apply_results(flags: list[Flag], outcomes_by_flag: dict[str, tuple[str, str]]) -> None:
+    rows: list[dict[str, object]] = []
+    now = datetime.now(UTC)
+    for f in flags:
+        verdict, response = outcomes_by_flag.get(
+            f.flag, (FlagVerdict.ERROR, "no verdict from protocol")
+        )
+        if verdict == FlagVerdict.ERROR and _is_retryable_error(response):
+            rows.append(
+                {
+                    "flag_id": f.id,
+                    "status_value": FlagStatus.QUEUED.value,
+                    "response_value": response[:4000],
+                    "submitted_at_value": None,
+                }
+            )
+            continue
+        new_status = _VERDICT_MAP.get(verdict, FlagStatus.ERROR)
+        rows.append(
+            {
+                "flag_id": f.id,
+                "status_value": new_status.value,
+                "response_value": response[:4000],
+                "submitted_at_value": now,
+            }
+        )
+
+    if not rows:
+        return
+
+    stmt = (
+        update(Flag.__table__)
+        .where(Flag.id == bindparam("flag_id"))
+        .values(
+            status=bindparam("status_value"),
+            response=bindparam("response_value"),
+            submitted_at=bindparam("submitted_at_value"),
+        )
+    )
     async with session_scope() as sess:
-        now = datetime.now(UTC)
-        for f in flags:
-            verdict, response = outcomes_by_flag.get(
-                f.flag, (FlagVerdict.ERROR, "no verdict from protocol")
-            )
-            new_status = _VERDICT_MAP.get(verdict, FlagStatus.ERROR)
-            await sess.execute(
-                update(Flag)
-                .where(Flag.id == f.id)
-                .values(status=new_status, response=response[:4000], submitted_at=now)
-            )
+        for chunk in _chunks(rows, _APPLY_CHUNK_SIZE):
+            await sess.execute(stmt, chunk)
 
 
 async def _rollback_pending(flags: list[Flag]) -> None:
@@ -85,15 +134,14 @@ async def _rollback_pending(flags: list[Flag]) -> None:
         )
 
 
-async def _tick() -> None:
-    cfg = get_config()
+async def _tick(cfg: FarmConfig) -> bool:
     batch = await _claim_batch(cfg.submitter.batch_size)
     if not batch:
-        return
+        return False
 
     proto_name = cfg.protocol
     proto_kwargs = cfg.protocols.get(proto_name, {})
-    log.info("submitting %d flags via '%s'", len(batch), proto_name)
+    log.debug("submitting %d flags via '%s'", len(batch), proto_name)
 
     try:
         proto = build_protocol(proto_name, **proto_kwargs)
@@ -101,10 +149,11 @@ async def _tick() -> None:
     except Exception:
         log.exception("protocol crashed; requeueing batch")
         await _rollback_pending(batch)
-        return
+        return True
 
     by_flag = {r.flag: (r.verdict, r.response) for r in results}
     await _apply_results(batch, by_flag)
+    return True
 
 
 async def main() -> None:
@@ -126,13 +175,18 @@ async def main() -> None:
 
     log.info("submitter started")
     while not stop.is_set():
-        cfg = get_config()
+        cfg = reload_config()
+        had_work = False
         try:
-            await _tick()
+            had_work = await _tick(cfg)
         except Exception:
             log.exception("submitter tick failed")
+        sleep_for = cfg.submitter.period if had_work else max(
+            cfg.submitter.period,
+            cfg.submitter.idle_period,
+        )
         try:
-            await asyncio.wait_for(stop.wait(), timeout=cfg.submitter.period)
+            await asyncio.wait_for(stop.wait(), timeout=sleep_for)
         except asyncio.TimeoutError:
             pass
 

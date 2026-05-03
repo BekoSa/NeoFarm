@@ -70,7 +70,7 @@ class FarmClient:
         stdout_tail: str | None,
         stderr_tail: str | None,
     ) -> None:
-        await self._client.post(
+        r = await self._client.post(
             "/api/runs",
             json={
                 "sploit": sploit,
@@ -84,6 +84,7 @@ class FarmClient:
                 "stderr_tail": stderr_tail,
             },
         )
+        r.raise_for_status()
 
     async def submit_flags(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         r = await self._client.post("/api/flags", json={"items": items})

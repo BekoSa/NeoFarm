@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { buildApi, Profile } from "../api/client";
+import { Profile, useApi } from "../api/client";
 import { Card } from "../components/Card";
 
 export function Manual({ profile }: { profile: Profile }) {
-  const api = buildApi(profile);
+  const api = useApi(profile);
   const [text, setText] = useState("");
   const [sploit, setSploit] = useState("manual");
   const [team, setTeam] = useState("");

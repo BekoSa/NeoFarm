@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { buildApi, FarmConfig, Profile } from "../api/client";
+import { FarmConfig, Profile, useApi } from "../api/client";
 import { Card } from "../components/Card";
 
 export function Config({ profile }: { profile: Profile }) {
-  const api = buildApi(profile);
+  const api = useApi(profile);
   const qc = useQueryClient();
   const cfg = useQuery({
     queryKey: ["config", profile.url],

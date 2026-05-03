@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     postgres_db: str = "farm"
     postgres_user: str = "farm"
     postgres_password: str = "farm"
+    postgres_pool_size: int = 10
+    postgres_max_overflow: int = 20
 
     redis_host: str = "redis"
     redis_port: int = 6379
@@ -67,6 +69,7 @@ class TeamConfig(BaseModel):
 
 class SubmitterConfig(BaseModel):
     period: float = 5.0
+    idle_period: float = 0.5
     batch_size: int = 100
 
 

@@ -56,6 +56,7 @@ class Flag(Base):
 
     __table_args__ = (
         Index("ix_flags_status_captured", "status", "captured_at"),
+        Index("ix_flags_status_submitted", "status", "submitted_at"),
     )
 
 

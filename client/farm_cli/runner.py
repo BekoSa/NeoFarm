@@ -19,8 +19,10 @@ import logging
 import os
 import re
 import shlex
+import signal
 import socket
 import time
+from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -30,6 +32,44 @@ log = logging.getLogger("farm.runner")
 
 _FLAG_TAIL_LIMIT = 4000
 _FLUSH_INTERVAL = 1.0
+_FINAL_FLAG_BATCH = 500
+_STREAM_CHUNK_SIZE = 4096
+_STREAM_CARRY_LIMIT = 512
+
+
+class _BoundedTail:
+    """Append-only buffer that retains only the last ``limit`` chars."""
+
+    __slots__ = ("_chunks", "_size", "_limit")
+
+    def __init__(self, limit: int) -> None:
+        self._chunks: deque[str] = deque()
+        self._size = 0
+        self._limit = limit
+
+    def append(self, text: str) -> None:
+        if not text:
+            return
+        # If a single write blows the budget, keep only the suffix.
+        if len(text) >= self._limit:
+            self._chunks.clear()
+            self._chunks.append(text[-self._limit :])
+            self._size = self._limit
+            return
+        self._chunks.append(text)
+        self._size += len(text)
+        while self._size > self._limit and self._chunks:
+            head = self._chunks[0]
+            drop = self._size - self._limit
+            if drop >= len(head):
+                self._chunks.popleft()
+                self._size -= len(head)
+            else:
+                self._chunks[0] = head[drop:]
+                self._size -= drop
+
+    def value(self) -> str:
+        return "".join(self._chunks)
 
 
 # Interpreter mapping for non-executable scripts.
@@ -75,26 +115,37 @@ def build_command(script: Path, target: str, extra_args: list[str]) -> list[str]
 async def _stream(
     proc: asyncio.subprocess.Process,
     on_chunk,
-    flag_re: re.Pattern[str] | None = None,
-) -> tuple[str, str]:
-    """Drain stdout/stderr concurrently. Calls on_chunk(chunk) for stdout."""
-    stdout_chunks: list[str] = []
-    stderr_chunks: list[str] = []
+    flag_re: re.Pattern[str],
+) -> tuple[str, str, list[str]]:
+    """Drain process output without retaining unbounded stdout/stderr."""
+    stdout_tail = _BoundedTail(_FLAG_TAIL_LIMIT)
+    stderr_tail = _BoundedTail(_FLAG_TAIL_LIMIT)
+    flags_seen: dict[str, None] = {}
 
     async def pump_stdout() -> None:
         assert proc.stdout
         buffer: list[str] = []
+        buffered_len = 0
+        carry = ""
         last = time.monotonic()
         while True:
-            line = await proc.stdout.readline()
-            if not line:
+            data = await proc.stdout.read(_STREAM_CHUNK_SIZE)
+            if not data:
                 break
-            text = line.decode("utf-8", "replace")
-            stdout_chunks.append(text)
+            text = data.decode("utf-8", "replace")
+            stdout_tail.append(text)
+
+            search_text = carry + text
+            for match in flag_re.finditer(search_text):
+                flags_seen.setdefault(match.group(0), None)
+            carry = search_text[-_STREAM_CARRY_LIMIT:]
+
             buffer.append(text)
-            if time.monotonic() - last >= _FLUSH_INTERVAL or sum(map(len, buffer)) > 4096:
+            buffered_len += len(text)
+            if time.monotonic() - last >= _FLUSH_INTERVAL or buffered_len >= 4096:
                 chunk = "".join(buffer)
                 buffer.clear()
+                buffered_len = 0
                 last = time.monotonic()
                 await on_chunk(chunk)
         if buffer:
@@ -103,13 +154,49 @@ async def _stream(
     async def pump_stderr() -> None:
         assert proc.stderr
         while True:
-            line = await proc.stderr.readline()
-            if not line:
+            data = await proc.stderr.read(_STREAM_CHUNK_SIZE)
+            if not data:
                 break
-            stderr_chunks.append(line.decode("utf-8", "replace"))
+            stderr_tail.append(data.decode("utf-8", "replace"))
 
     await asyncio.gather(pump_stdout(), pump_stderr())
-    return "".join(stdout_chunks), "".join(stderr_chunks)
+    return stdout_tail.value(), stderr_tail.value(), list(flags_seen)
+
+
+def _batched(items: list[str], size: int) -> Iterable[list[str]]:
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the child's process group; falls back to single-pid kill."""
+    pid = proc.pid
+    if pid is None:
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+        return
+    except ProcessLookupError:
+        return
+    except (PermissionError, OSError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+
+
+async def _submit_flags_with_retries(
+    farm: FarmClient,
+    items: list[dict],
+    log_label: str,
+) -> None:
+    for attempt in range(3):
+        try:
+            await farm.submit_flags(items)
+            return
+        except Exception:
+            if attempt == 2:
+                log.exception("%s failed", log_label)
+            else:
+                await asyncio.sleep(0.2 * (attempt + 1))
 
 
 async def run_once(
@@ -120,60 +207,105 @@ async def run_once(
     team: str | None,
     timeout: float,
     extra_args: list[str],
+    flag_format: str,
     farm: FarmClient,
     host_label: str,
 ) -> RunResult:
     cmd = build_command(script, target_ip, extra_args)
     start = time.monotonic()
 
+    # start_new_session=True puts the child in its own process group so we can
+    # SIGKILL the whole tree on timeout (exploits often spawn helpers).
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env={**os.environ, "FARM_TARGET": target_ip},
+        start_new_session=True,
     )
+    flag_re = re.compile(flag_format)
 
     async def on_chunk(chunk: str) -> None:
-        try:
-            await farm.submit_flags(
-                [
-                    {
-                        "output": chunk,
-                        "sploit": sploit,
-                        "team": team,
-                        "target_ip": target_ip,
-                    }
-                ]
-            )
-        except Exception:  # network blip, don't kill the run
-            log.exception("flag submit failed")
+        await _submit_flags_with_retries(
+            farm,
+            [
+                {
+                    "output": chunk,
+                    "sploit": sploit,
+                    "team": team,
+                    "target_ip": target_ip,
+                }
+            ],
+            "flag submit",
+        )
 
+    stream_task = asyncio.create_task(_stream(proc, on_chunk, flag_re))
+    timed_out = False
     try:
-        stdout, stderr = await asyncio.wait_for(_stream(proc, on_chunk), timeout=timeout)
-        exit_code = await proc.wait()
+        exit_code = await asyncio.wait_for(proc.wait(), timeout=timeout)
     except asyncio.TimeoutError:
-        proc.kill()
+        timed_out = True
+        _kill_process_tree(proc)
         with contextlib.suppress(Exception):
             await proc.wait()
-        stdout, stderr = ("", f"[farm] killed after {timeout:.1f}s\n")
         exit_code = -9
+
+    try:
+        stdout, stderr, final_flags = await asyncio.wait_for(stream_task, timeout=2.0)
+    except Exception:
+        stream_task.cancel()
+        with contextlib.suppress(Exception, asyncio.CancelledError):
+            await stream_task
+        stdout, stderr, final_flags = (
+            "",
+            "[farm] failed to collect process output\n",
+            [],
+        )
+
+    if timed_out:
+        stderr = ((stderr or "") + f"[farm] killed after {timeout:.1f}s\n")[
+            -_FLAG_TAIL_LIMIT:
+        ]
 
     duration_ms = int((time.monotonic() - start) * 1000)
 
-    flag_re = re.compile(r"[A-Z0-9]{31}=")
-    flags_found = len(set(flag_re.findall(stdout)))
+    flags_found = len(final_flags)
 
-    await farm.report_run(
-        sploit=sploit,
-        team=team,
-        target_ip=target_ip,
-        host=host_label,
-        flags_found=flags_found,
-        duration_ms=duration_ms,
-        exit_code=exit_code,
-        stdout_tail=stdout[-_FLAG_TAIL_LIMIT:] or None,
-        stderr_tail=stderr[-_FLAG_TAIL_LIMIT:] or None,
-    )
+    for batch in _batched(final_flags, _FINAL_FLAG_BATCH):
+        await _submit_flags_with_retries(
+            farm,
+            [
+                {
+                    "flag": flag,
+                    "sploit": sploit,
+                    "team": team,
+                    "target_ip": target_ip,
+                }
+                for flag in batch
+            ],
+            "final flag submit",
+        )
+
+    for attempt in range(3):
+        try:
+            await farm.report_run(
+                sploit=sploit,
+                team=team,
+                target_ip=target_ip,
+                host=host_label,
+                flags_found=flags_found,
+                duration_ms=duration_ms,
+                exit_code=exit_code,
+                stdout_tail=stdout[-_FLAG_TAIL_LIMIT:] or None,
+                stderr_tail=stderr[-_FLAG_TAIL_LIMIT:] or None,
+            )
+            break
+        except Exception:
+            if attempt == 2:
+                log.exception("run report failed")
+            else:
+                await asyncio.sleep(0.2 * (attempt + 1))
 
     return RunResult(
         team=team,
@@ -194,6 +326,7 @@ async def fan_out(
     timeout: float,
     parallelism: int,
     extra_args: list[str],
+    flag_format: str,
     farm: FarmClient,
 ) -> list[RunResult]:
     sem = asyncio.Semaphore(parallelism)
@@ -208,6 +341,7 @@ async def fan_out(
                 team=team,
                 timeout=timeout,
                 extra_args=extra_args,
+                flag_format=flag_format,
                 farm=farm,
                 host_label=host_label,
             )

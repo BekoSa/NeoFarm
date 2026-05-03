@@ -1,25 +1,37 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { buildApi, FlagOut, Profile } from "../api/client";
+import { FlagOut, Profile, useApi } from "../api/client";
 import { Card } from "../components/Card";
 import { StatusPill } from "../components/StatusPill";
 
 const STATUSES = ["", "QUEUED", "PENDING", "ACCEPTED", "REJECTED", "EXPIRED", "DUPLICATE", "ERROR"];
 
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(id);
+  }, [value, delayMs]);
+  return debounced;
+}
+
 export function Flags({ profile }: { profile: Profile }) {
-  const api = buildApi(profile);
+  const api = useApi(profile);
   const qc = useQueryClient();
   const [status, setStatus] = useState("");
   const [sploit, setSploit] = useState("");
   const [team, setTeam] = useState("");
+  // Debounce free-form text inputs so typing doesn't fire one request per keystroke.
+  const sploitQuery = useDebounced(sploit, 300);
+  const teamQuery = useDebounced(team, 300);
 
   const flags = useQuery({
-    queryKey: ["flags", profile.url, status, sploit, team],
+    queryKey: ["flags", profile.url, status, sploitQuery, teamQuery],
     queryFn: async () => {
       const params: Record<string, string> = { limit: "300" };
       if (status) params.status = status;
-      if (sploit) params.sploit = sploit;
-      if (team) params.team = team;
+      if (sploitQuery) params.sploit = sploitQuery;
+      if (teamQuery) params.team = teamQuery;
       return (await api.get<FlagOut[]>("/api/flags", { params })).data;
     },
     refetchInterval: 5_000,

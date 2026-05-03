@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import random
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import desc, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, schemas
@@ -18,25 +22,71 @@ from ..ws import hub
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
 
+_INGEST_RETRIES = 5
+_INGEST_CHUNK_SIZE = 1000
+
+
+def _dedupe_and_sort_rows(
+    rows: list[dict[str, str | None]],
+) -> list[dict[str, str | None]]:
+    """Keep first metadata for each flag and lock unique index keys stably."""
+    by_flag: dict[str, dict[str, str | None]] = {}
+    for row in rows:
+        flag = row.get("flag")
+        if flag and flag not in by_flag:
+            by_flag[flag] = row
+    return [by_flag[flag] for flag in sorted(by_flag)]
+
+
+def _is_retryable_ingest_error(exc: DBAPIError) -> bool:
+    text = str(exc.orig).lower()
+    return "deadlock detected" in text or "could not serialize access" in text
+
+
+def _chunks(
+    rows: list[dict[str, str | None]],
+    size: int,
+) -> Iterator[list[dict[str, str | None]]]:
+    for i in range(0, len(rows), size):
+        yield rows[i : i + size]
+
 
 async def _ingest_flags(
     sess: AsyncSession,
     rows: list[dict[str, str | None]],
 ) -> tuple[int, int]:
-    """Bulk-insert candidate flags. Returns (new, duplicate)."""
+    """Bulk-insert candidate flags. Returns (new, duplicate).
+
+    `duplicate` = how many of the candidates already existed in the DB
+    (dedup against the unique index). Intra-batch repeats are collapsed
+    before the insert and so don't inflate the count.
+    """
     if not rows:
         return 0, 0
-    stmt = (
-        pg_insert(models.Flag)
-        .values(rows)
-        .on_conflict_do_nothing(index_elements=[models.Flag.flag])
-        .returning(models.Flag.id, models.Flag.flag)
-    )
-    result = await sess.execute(stmt)
-    inserted = result.fetchall()
-    new = len(inserted)
-    dup = len(rows) - new
-    return new, dup
+
+    insert_rows = _dedupe_and_sort_rows(rows)
+    for attempt in range(_INGEST_RETRIES):
+        try:
+            inserted = []
+            for chunk in _chunks(insert_rows, _INGEST_CHUNK_SIZE):
+                stmt = (
+                    pg_insert(models.Flag)
+                    .values(chunk)
+                    .on_conflict_do_nothing(index_elements=[models.Flag.flag])
+                    .returning(models.Flag.id, models.Flag.flag)
+                )
+                result = await sess.execute(stmt)
+                inserted.extend(result.fetchall())
+            new = len(inserted)
+            dup = len(insert_rows) - new
+            return new, dup
+        except DBAPIError as exc:
+            await sess.rollback()
+            if not _is_retryable_ingest_error(exc) or attempt == _INGEST_RETRIES - 1:
+                raise
+            await asyncio.sleep(0.05 * (2**attempt) + random.uniform(0, 0.05))
+
+    raise RuntimeError("unreachable ingest retry state")
 
 
 @router.post(

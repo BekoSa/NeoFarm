@@ -96,6 +96,7 @@ function Login({ onLogin }: { onLogin: (p: Profile) => void }) {
     try {
       const api = buildApi({ url, token });
       await api.get("/health");
+      await api.get("/api/config/protocols");
       onLogin({ url: url.replace(/\/$/, ""), token });
     } catch (e: any) {
       setErr(e?.response?.data?.detail || e?.message || "connection failed");

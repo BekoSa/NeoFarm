@@ -43,6 +43,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-farm}
       POSTGRES_USER: ${POSTGRES_USER:-farm}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farm}
+      POSTGRES_POOL_SIZE: ${POSTGRES_POOL_SIZE:-10}
+      POSTGRES_MAX_OVERFLOW: ${POSTGRES_MAX_OVERFLOW:-20}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       FARM_API_TOKEN: ${FARM_API_TOKEN:-change-me-please}
@@ -74,6 +76,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-farm}
       POSTGRES_USER: ${POSTGRES_USER:-farm}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farm}
+      POSTGRES_POOL_SIZE: ${POSTGRES_POOL_SIZE:-10}
+      POSTGRES_MAX_OVERFLOW: ${POSTGRES_MAX_OVERFLOW:-20}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       FARM_CONFIG: /app/config.yml
@@ -97,6 +101,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-farm}
       POSTGRES_USER: ${POSTGRES_USER:-farm}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-farm}
+      POSTGRES_POOL_SIZE: ${POSTGRES_POOL_SIZE:-10}
+      POSTGRES_MAX_OVERFLOW: ${POSTGRES_MAX_OVERFLOW:-20}
       FARM_CONFIG: /app/config.yml
       FARM_ROLE: expirer
     command: ["python", "-m", "farm.workers.expirer"]

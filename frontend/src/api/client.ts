@@ -1,4 +1,5 @@
 import axios, { AxiosInstance } from "axios";
+import { useMemo } from "react";
 
 export interface Profile {
   url: string;
@@ -39,6 +40,11 @@ export function buildApi(profile: Profile): AxiosInstance {
     headers: { "X-Farm-Token": profile.token },
     timeout: 15_000,
   });
+}
+
+/** Stable axios instance per (url, token) — avoids re-creating one per render. */
+export function useApi(profile: Profile): AxiosInstance {
+  return useMemo(() => buildApi(profile), [profile.url, profile.token]);
 }
 
 export interface FlagOut {
