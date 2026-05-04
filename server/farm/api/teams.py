@@ -13,4 +13,4 @@ router = APIRouter(prefix="/api/teams", tags=["teams"])
 
 @router.get("", response_model=list[TeamOut], dependencies=[Depends(require_token)])
 async def list_teams() -> list[TeamOut]:
-    return [TeamOut(alias=t.alias, ip=t.ip) for t in get_config().teams]
+    return [TeamOut(alias=t.alias, ip=t.ip) for t in get_config().expanded_teams()]

@@ -28,8 +28,8 @@ services:
 
   server:
     build:
-      context: ./server
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: server/Dockerfile
     image: farm-server:latest
     restart: unless-stopped
     depends_on:

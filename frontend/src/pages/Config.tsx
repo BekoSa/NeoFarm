@@ -104,6 +104,11 @@ export function Config({ profile }: { profile: Profile }) {
             <li><code className="mono">round_length</code> – clients pace exploit launches by this.</li>
             <li><code className="mono">submitter.period</code> + <code className="mono">batch_size</code> – submission rate-limit.</li>
             <li><code className="mono">protocols.{"<name>"}</code> – kwargs forwarded to the protocol class.</li>
+            <li>
+              <code className="mono">teams</code> – list of <code className="mono">{"{alias, ip}"}</code> or ranges{" "}
+              <code className="mono">{"{from, to, alias?, ip?}"}</code> with{" "}
+              <code className="mono">{"{i}"}</code>/<code className="mono">{"{i:02d}"}</code> templates.
+            </li>
           </ul>
         </Card>
       </div>

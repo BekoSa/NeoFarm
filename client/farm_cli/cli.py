@@ -191,7 +191,9 @@ async def run(
                 alias, ip = spec.split("=", 1)
                 targets.append((alias.strip(), ip.strip()))
         else:
-            teams_raw = cfg.get("teams") or []
+            # Pull from /api/teams — the server has already expanded any
+            # range/template entries into concrete (alias, ip) pairs.
+            teams_raw = await client.list_teams()
             targets = [(t["alias"], t["ip"]) for t in teams_raw]
 
         if not targets:

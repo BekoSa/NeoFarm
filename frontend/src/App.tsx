@@ -6,6 +6,7 @@ import { Exploits } from "./pages/Exploits";
 import { Config } from "./pages/Config";
 import { Manual } from "./pages/Manual";
 import { LiveBadge } from "./components/LiveBadge";
+import { InstallModal } from "./components/InstallModal";
 
 type Tab = "dashboard" | "flags" | "exploits" | "manual" | "config";
 
@@ -45,6 +46,7 @@ function Shell({
   setTab: (t: Tab) => void;
   children: React.ReactNode;
 }) {
+  const [showInstall, setShowInstall] = useState(false);
   return (
     <div className="min-h-full">
       <header className="border-b border-border bg-panel">
@@ -71,6 +73,13 @@ function Shell({
             <span className="mono">{profile.url}</span>
             <button
               className="text-xs px-2 py-1 rounded border border-border hover:bg-panel2"
+              onClick={() => setShowInstall(true)}
+              title="How to install farm-cli on a client machine"
+            >
+              ⬇ Install CLI
+            </button>
+            <button
+              className="text-xs px-2 py-1 rounded border border-border hover:bg-panel2"
               onClick={onLogout}
             >
               logout
@@ -79,6 +88,13 @@ function Shell({
         </div>
       </header>
       <main className="max-w-[1400px] mx-auto p-6">{children}</main>
+      {showInstall && (
+        <InstallModal
+          url={profile.url}
+          token={profile.token}
+          onClose={() => setShowInstall(false)}
+        />
+      )}
     </div>
   );
 }
@@ -88,6 +104,7 @@ function Login({ onLogin }: { onLogin: (p: Profile) => void }) {
   const [token, setToken] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showInstall, setShowInstall] = useState(false);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,13 +147,30 @@ function Login({ onLogin }: { onLogin: (p: Profile) => void }) {
           placeholder="X-Farm-Token"
         />
         {err && <div className="text-red-400 text-sm mb-3">{err}</div>}
-        <button
-          disabled={busy || !token || !url}
-          className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-3 py-2 rounded font-medium"
-        >
-          {busy ? "connecting…" : "Connect"}
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            disabled={busy || !token || !url}
+            className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-3 py-2 rounded font-medium"
+          >
+            {busy ? "connecting…" : "Connect"}
+          </button>
+          <button
+            type="button"
+            disabled={!url}
+            onClick={() => setShowInstall(true)}
+            className="border border-border hover:bg-panel2 disabled:opacity-50 px-3 py-2 rounded font-medium"
+          >
+            Install CLI
+          </button>
+        </div>
         <div className="text-xs text-muted mt-4">© {yearLabel} farm</div>
+        {showInstall && (
+          <InstallModal
+            url={url}
+            token={token || undefined}
+            onClose={() => setShowInstall(false)}
+          />
+        )}
       </form>
     </div>
   );

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -63,8 +63,49 @@ class Settings(BaseSettings):
 
 
 class TeamConfig(BaseModel):
+    """Single team — explicit alias + IP."""
+
+    model_config = ConfigDict(extra="forbid")
+
     alias: str
     ip: str
+
+
+class TeamRange(BaseModel):
+    """Compact form for declaring many teams at once.
+
+    Templates use Python's str.format syntax. The integer team number is
+    bound to ``{i}``; e.g. ``{i:02d}`` zero-pads to 2 digits.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    from_: int = Field(alias="from", ge=0)
+    to: int = Field(ge=0)
+    alias: str = "team-{i}"
+    ip: str = "10.60.{i}.2"
+
+    @field_validator("to")
+    @classmethod
+    def _check_to(cls, v: int, info) -> int:
+        lo = info.data.get("from_")
+        if lo is not None and v < lo:
+            raise ValueError(f"'to' ({v}) must be >= 'from' ({lo})")
+        return v
+
+    def expand(self) -> list[TeamConfig]:
+        out: list[TeamConfig] = []
+        for i in range(self.from_, self.to + 1):
+            try:
+                a = self.alias.format(i=i)
+                ip = self.ip.format(i=i)
+            except (KeyError, IndexError, ValueError) as e:
+                raise ValueError(
+                    f"team range template error at i={i}: {e}. "
+                    "Use {i} or {i:02d}."
+                ) from e
+            out.append(TeamConfig(alias=a, ip=ip))
+        return out
 
 
 class SubmitterConfig(BaseModel):
@@ -82,7 +123,7 @@ class FarmConfig(BaseModel):
     protocol: str = "dummy"
     protocols: dict[str, dict[str, Any]] = Field(default_factory=dict)
     submitter: SubmitterConfig = Field(default_factory=SubmitterConfig)
-    teams: list[TeamConfig] = Field(default_factory=list)
+    teams: list[TeamRange | TeamConfig] = Field(default_factory=list)
 
     @field_validator("flag_format")
     @classmethod
@@ -91,6 +132,17 @@ class FarmConfig(BaseModel):
 
         re.compile(value)  # raises if invalid
         return value
+
+    def expanded_teams(self) -> list[TeamConfig]:
+        """Flatten ranges into concrete teams; later entries win on alias clash."""
+        seen: dict[str, TeamConfig] = {}
+        for item in self.teams:
+            if isinstance(item, TeamRange):
+                for t in item.expand():
+                    seen[t.alias] = t
+            else:
+                seen[item.alias] = item
+        return list(seen.values())
 
 
 _lock = threading.Lock()
@@ -144,7 +196,7 @@ def replace_config(new_cfg: FarmConfig, *, persist: bool = True) -> FarmConfig:
             _config_path.parent.mkdir(parents=True, exist_ok=True)
             with _config_path.open("w", encoding="utf-8") as fh:
                 yaml.safe_dump(
-                    new_cfg.model_dump(mode="python"),
+                    new_cfg.model_dump(mode="python", by_alias=True),
                     fh,
                     sort_keys=False,
                     allow_unicode=True,
@@ -153,7 +205,7 @@ def replace_config(new_cfg: FarmConfig, *, persist: bool = True) -> FarmConfig:
 
 
 def team_alias_for_ip(ip: str) -> str | None:
-    for team in get_config().teams:
+    for team in get_config().expanded_teams():
         if team.ip == ip:
             return team.alias
     return None

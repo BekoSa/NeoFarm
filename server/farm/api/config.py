@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/config", tags=["config"])
 
 @router.get("", dependencies=[Depends(require_token)])
 async def read_config() -> dict:
-    return get_config().model_dump(mode="json")
+    return get_config().model_dump(mode="json", by_alias=True)
 
 
 @router.put("", dependencies=[Depends(require_token)])
@@ -29,7 +29,7 @@ async def write_config(payload: dict) -> dict:
             f"available: {sorted(available_protocols())}",
         )
     new = replace_config(cfg, persist=True)
-    return new.model_dump(mode="json")
+    return new.model_dump(mode="json", by_alias=True)
 
 
 @router.get("/protocols", dependencies=[Depends(require_token)])

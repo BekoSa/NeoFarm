@@ -47,6 +47,25 @@ submitter:
 
 # Teams. The CLI looks up a team's IP by alias; flags are tagged with the
 # team alias they were stolen from for nicer stats.
+#
+# Two forms are supported and may be mixed freely:
+#
+#   1. Explicit  — one entry per team:
+#        - alias: team-1
+#          ip: 10.60.1.2
+#
+#   2. Range / template — one entry expands into many. ``{i}`` is the
+#      team number; format-spec works (``{i:02d}`` zero-pads to 2 digits).
+#      The defaults are alias="team-{i}" and ip="10.60.{i}.2".
+#        - from: 1
+#          to: 20
+#        - from: 1
+#          to: 10
+#          alias: "team-{i:02d}"
+#          ip: "10.62.{i}.2"
+#
+# Later entries win on alias clash, so you can override one team in a range
+# by adding an explicit entry after it.
 teams:
   - alias: team-1
     ip: 10.60.1.2

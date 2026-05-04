@@ -1,0 +1,50 @@
+# Keep the build context lean. Anything matching here is invisible to the
+# Docker daemon when it builds an image.
+
+.git/
+.gitignore
+.idea/
+.vscode/
+.claude/
+.codex/
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+**/*.egg-info/
+client/build/
+client/dist/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+.vite/
+
+# Local config / secrets
+.env
+.env.local
+.env.*.local
+config.local.yml
+config.*.local.yml
+docker-compose.override.yml
+
+# Notes / docs the image doesn't need
+docs/
+*.md
+!server/**/*.md
+
+# Tests / loadtests stay out of the runtime image
+tests/

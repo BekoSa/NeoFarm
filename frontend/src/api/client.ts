@@ -106,6 +106,15 @@ export interface TeamOut {
   ip: string;
 }
 
+export interface TeamRange {
+  from: number;
+  to: number;
+  alias?: string;
+  ip?: string;
+}
+
+export type TeamEntry = TeamOut | TeamRange;
+
 export interface FarmConfig {
   flag_format: string;
   flag_lifetime: number;
@@ -113,5 +122,7 @@ export interface FarmConfig {
   protocol: string;
   protocols: Record<string, Record<string, unknown>>;
   submitter: { period: number; batch_size: number };
-  teams: TeamOut[];
+  // Mixed list: explicit {alias, ip} entries and/or {from, to, alias?, ip?}
+  // ranges. Use /api/teams if you want a flat, expanded list.
+  teams: TeamEntry[];
 }
