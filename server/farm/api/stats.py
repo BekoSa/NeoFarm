@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 
@@ -14,6 +16,12 @@ from ..db import get_session
 from ..deps import require_token
 
 router = APIRouter(prefix="/api/stats", tags=["stats"])
+
+# Every open dashboard polls this every few seconds and each call scans the
+# whole flags table, so all viewers share one result for a short while.
+_CACHE_TTL = 2.0
+_cache: tuple[float, schemas.StatsOut] | None = None
+_cache_lock = asyncio.Lock()
 
 _STATUS_FIELD = {
     models.FlagStatus.ACCEPTED.value: "accepted",
@@ -79,6 +87,18 @@ def _add_count(counts: dict[str, int], status: str, count: int) -> None:
 
 @router.get("", response_model=schemas.StatsOut, dependencies=[Depends(require_token)])
 async def stats(sess: AsyncSession = Depends(get_session)) -> schemas.StatsOut:
+    global _cache
+    if _cache is not None and time.monotonic() - _cache[0] < _CACHE_TTL:
+        return _cache[1]
+    async with _cache_lock:
+        if _cache is not None and time.monotonic() - _cache[0] < _CACHE_TTL:
+            return _cache[1]
+        result = await _compute(sess)
+        _cache = (time.monotonic(), result)
+        return result
+
+
+async def _compute(sess: AsyncSession) -> schemas.StatsOut:
     cols = _bucket_columns()
     now = datetime.now(UTC)
 

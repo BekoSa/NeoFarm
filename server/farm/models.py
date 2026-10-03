@@ -33,7 +33,7 @@ class FlagStatus(StrEnum):
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
     DUPLICATE = "DUPLICATE"    # we already had it
-    ERROR = "ERROR"            # transport-level failure
+    ERROR = "ERROR"            # legacy: jury errors are now retried until expiry
 
 
 class Flag(Base):
@@ -48,6 +48,9 @@ class Flag(Base):
     team: Mapped[str | None] = mapped_column(String(64), index=True)
     target_ip: Mapped[str | None] = mapped_column(String(64))
     response: Mapped[str | None] = mapped_column(Text)
+    # Jury submission attempts so far; the submitter serves fresh flags
+    # (fewest attempts) before retrying ones the jury failed to answer.
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     captured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
@@ -57,6 +60,7 @@ class Flag(Base):
     __table_args__ = (
         Index("ix_flags_status_captured", "status", "captured_at"),
         Index("ix_flags_status_submitted", "status", "submitted_at"),
+        Index("ix_flags_status_attempts_captured", "status", "attempts", "captured_at"),
     )
 
 

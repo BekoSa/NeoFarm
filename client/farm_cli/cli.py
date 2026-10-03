@@ -18,11 +18,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
+import random
 import signal
 import socket
 import sys
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
@@ -33,7 +34,7 @@ from rich.table import Table
 
 from . import profile as profile_mod
 from .api import FarmClient
-from .runner import fan_out, parse_extra_args
+from .runner import build_command, fan_out, parse_extra_args
 
 console = Console()
 log = logging.getLogger("farm.cli")
@@ -121,6 +122,62 @@ async def send(text: str, sploit: str, team: str | None) -> None:
     console.print(result)
 
 
+@dataclass(slots=True)
+class _RoundPlan:
+    """What the farm told us last time; kept when a refresh fails."""
+
+    enabled: bool = True
+    round_length: float = 60.0
+    flag_format: str = r"[A-Z0-9]{31}="
+    targets: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _parse_targets(specs: tuple[str, ...]) -> list[tuple[str, str]]:
+    targets: list[tuple[str, str]] = []
+    for spec in specs:
+        if "=" not in spec:
+            raise click.BadParameter(f"--target must be alias=ip ({spec!r})")
+        alias, ip = spec.split("=", 1)
+        targets.append((alias.strip(), ip.strip()))
+    return targets
+
+
+async def _refresh_plan(
+    client: FarmClient,
+    plan: _RoundPlan,
+    *,
+    sploit: str,
+    notes: str | None,
+    fixed_targets: list[tuple[str, str]],
+    strict: bool,
+) -> None:
+    """Pull the exploit switch, config and team list from the farm.
+
+    Runs every round, so config edits and the UI on/off toggle apply to
+    running clients. With `strict` (first round) errors are fatal;
+    afterwards the last known values are kept.
+    """
+    try:
+        expl = await client.register_exploit(
+            name=sploit, host=socket.gethostname(), notes=notes
+        )
+        cfg = await client.get_config()
+        teams = (
+            fixed_targets
+            or [(t["alias"], t["ip"]) for t in await client.list_teams()]
+        )
+    except httpx.HTTPError as exc:
+        if strict:
+            console.print(f"[red]cannot reach the farm: {exc}[/red]")
+            sys.exit(1)
+        log.warning("farm refresh failed (%s); reusing the last known config", exc)
+        return
+    plan.enabled = bool(expl.get("enabled", True))
+    plan.round_length = float(cfg.get("round_length", plan.round_length))
+    plan.flag_format = cfg.get("flag_format", plan.flag_format)
+    plan.targets = teams
+
+
 @cli.command("run")
 @click.argument("script", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--name", "-n", default=None, help="Exploit name (defaults to filename).")
@@ -128,13 +185,18 @@ async def send(text: str, sploit: str, team: str | None) -> None:
     "--once", is_flag=True, default=False, help="Run a single round and exit."
 )
 @click.option(
-    "--parallelism", "-p", type=int, default=8, help="Concurrent team runs."
+    "--parallelism",
+    "-p",
+    type=int,
+    default=0,
+    help="Concurrent team runs (default 0 = all targets at once).",
 )
 @click.option(
     "--timeout",
     type=float,
     default=None,
-    help="Per-team timeout (s). Defaults to round_length - 5.",
+    help="Time budget per round, which also caps each team run (s). "
+    "Defaults to round_length - 5.",
 )
 @click.option(
     "--target",
@@ -166,79 +228,101 @@ async def run(
     SCRIPT is invoked as `<interpreter> SCRIPT <team-ip> [extra-args]`. The
     target IP is also exported as $FARM_TARGET. Anything matching the farm's
     flag regex on stdout is submitted automatically.
+
+    Ctrl-C finishes the current round and exits; press it again to kill
+    the running exploits immediately.
     """
     sploit = name or script.stem
+    args = parse_extra_args(extra_args)
+    build_command(script, "0.0.0.0", args)  # fail fast on an unrunnable script
+    fixed_targets = _parse_targets(target)
     p = profile_mod.load()
 
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
+    round_task: asyncio.Task | None = None
 
-    async with FarmClient(p, timeout=20.0) as client:
-        await client.register_exploit(
-            name=sploit, host=socket.gethostname(), notes=notes
+    def on_signal() -> None:
+        if stop.is_set():
+            console.print("[red]aborting: killing running exploits[/red]")
+            if round_task is not None:
+                round_task.cancel()
+            return
+        stop.set()
+        console.print(
+            "[yellow]stopping after this round — Ctrl-C again to abort now[/yellow]"
         )
 
-        cfg = await client.get_config()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, on_signal)
 
-        # Build the team table: explicit --target wins; otherwise pull from config.
-        if target:
-            targets: list[tuple[str, str]] = []
-            for spec in target:
-                if "=" not in spec:
-                    raise click.BadParameter(f"--target must be alias=ip ({spec!r})")
-                alias, ip = spec.split("=", 1)
-                targets.append((alias.strip(), ip.strip()))
-        else:
-            # Pull from /api/teams — the server has already expanded any
-            # range/template entries into concrete (alias, ip) pairs.
-            teams_raw = await client.list_teams()
-            targets = [(t["alias"], t["ip"]) for t in teams_raw]
-
-        if not targets:
-            console.print(
-                "[red]no targets[/red]: configure teams in config.yml or pass --target"
-            )
-            sys.exit(2)
-
-        round_length = cfg.get("round_length", 60)
-        flag_format = cfg.get("flag_format", r"[A-Z0-9]{31}=")
-        eff_timeout = timeout if timeout is not None else max(5.0, round_length - 5)
-
+    plan = _RoundPlan()
+    async with FarmClient(p, timeout=20.0) as client:
         round_idx = 0
         while not stop.is_set():
             round_idx += 1
             t0 = time.monotonic()
-            console.print(
-                f"[cyan]round {round_idx}[/cyan] sploit={sploit} "
-                f"targets={len(targets)} timeout={eff_timeout:.1f}s"
+            await _refresh_plan(
+                client, plan, sploit=sploit, notes=notes,
+                fixed_targets=fixed_targets, strict=round_idx == 1,
             )
-            try:
-                results = await fan_out(
-                    script=script,
-                    sploit=sploit,
-                    targets=targets,
-                    timeout=eff_timeout,
-                    parallelism=parallelism,
-                    extra_args=parse_extra_args(extra_args),
-                    flag_format=flag_format,
-                    farm=client,
-                )
-            except Exception:
-                log.exception("round failed")
-                results = []
+            budget = timeout if timeout is not None else max(5.0, plan.round_length - 5)
 
-            total_flags = sum(r.flags_found for r in results)
-            elapsed = time.monotonic() - t0
-            console.print(
-                f"  done in {elapsed:.1f}s, captured {total_flags} flag(s)"
-            )
+            if not plan.targets:
+                console.print(
+                    "[red]no targets[/red]: configure teams in config.yml or pass --target"
+                )
+                if round_idx == 1:
+                    sys.exit(2)
+            elif not plan.enabled:
+                console.print(
+                    f"[yellow]round {round_idx}[/yellow] sploit={sploit} is "
+                    "disabled in the UI — skipping"
+                )
+            else:
+                # Shuffle so the same teams aren't always the ones that
+                # start last and get cut by the round deadline.
+                targets = random.sample(plan.targets, len(plan.targets))
+                console.print(
+                    f"[cyan]round {round_idx}[/cyan] sploit={sploit} "
+                    f"targets={len(targets)} budget={budget:.1f}s"
+                )
+                round_task = asyncio.create_task(
+                    fan_out(
+                        script=script,
+                        sploit=sploit,
+                        targets=targets,
+                        timeout=budget,
+                        deadline=t0 + budget,
+                        parallelism=parallelism,
+                        extra_args=args,
+                        flag_format=plan.flag_format,
+                        farm=client,
+                    )
+                )
+                try:
+                    results = await round_task
+                except asyncio.CancelledError:
+                    console.print("[red]round aborted[/red]")
+                    break
+                except Exception:
+                    log.exception("round failed")
+                    results = []
+                finally:
+                    round_task = None
+
+                total_flags = sum(r.flags_found for r in results)
+                skipped = sum(r.skipped for r in results)
+                elapsed = time.monotonic() - t0
+                console.print(
+                    f"  done in {elapsed:.1f}s, captured {total_flags} flag(s)"
+                    + (f", [yellow]{skipped} target(s) skipped[/yellow]" if skipped else "")
+                )
 
             if once or stop.is_set():
                 break
 
-            sleep_for = max(0.5, round_length - elapsed)
+            sleep_for = max(0.5, plan.round_length - (time.monotonic() - t0))
             try:
                 await asyncio.wait_for(stop.wait(), timeout=sleep_for)
             except asyncio.TimeoutError:
@@ -250,8 +334,9 @@ async def run(
 async def watch() -> None:
     """Tail the live WebSocket event feed."""
     p = profile_mod.load()
-    url = f"{p.ws_url}/ws?token={p.token}"
+    url = f"{p.ws_url}/ws"
     async with websockets.connect(url, ping_interval=20) as ws:
+        await ws.send(p.token)  # auth: first message, keeps the token out of URLs
         console.print(f"[green]connected[/green] to {url}")
         async for msg in ws:
             try:

@@ -42,8 +42,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# curl: compose healthcheck. All Python deps ship cp314 wheels, so no
+# compiler in the runtime image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential curl ca-certificates \
+        curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY server/pyproject.toml /app/pyproject.toml

@@ -1,10 +1,11 @@
 FROM node:22-alpine AS build
 WORKDIR /app
-COPY package.json ./
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 COPY . .
-ARG VITE_API_BASE
-ARG VITE_WS_BASE
+# Empty (default) = the UI uses its own origin; nginx proxies the API.
+ARG VITE_API_BASE=""
+ARG VITE_WS_BASE=""
 ENV VITE_API_BASE=$VITE_API_BASE
 ENV VITE_WS_BASE=$VITE_WS_BASE
 RUN npm run build

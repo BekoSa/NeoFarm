@@ -2,13 +2,17 @@
 
 Behaviour:
 
-* Wakes every `submitter.period` seconds.
-* Picks up to `submitter.batch_size` queued flags (oldest first).
-* Marks them PENDING within the same transaction so a crash mid-flight
-  doesn't double-submit.
-* Calls the configured protocol; updates each row with verdict + response.
-* If the protocol raises before producing any result, the flags are
-  rolled back to QUEUED.
+* Picks up to `submitter.batch_size` queued flags — fresh ones (fewest
+  attempts) first, oldest first within that — and marks them PENDING in
+  the same transaction, so concurrent submitters never double-submit.
+* Calls the configured protocol and records each verdict.
+* ERROR verdicts (jury unreachable, 5xx, 4xx from a misconfigured team
+  token/id, ...) are never final: the flag goes back to QUEUED with its
+  attempt counter bumped, and is retried until the expirer retires it.
+  Fixing the config mid-game therefore loses nothing.
+* If the protocol raises, the whole batch is requeued the same way.
+* After a submission it waits `submitter.period` (the jury rate limit);
+  while the queue is empty it polls every `submitter.idle_period`.
 """
 
 from __future__ import annotations
@@ -17,11 +21,13 @@ import asyncio
 import logging
 import signal
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import bindparam, select, update
 
-from ..config import FarmConfig, reload_config
+from .. import events
+from ..config import FarmConfig, get_config, reload_config
 from ..db import init_db, session_scope
 from ..models import Flag, FlagStatus
 from ..protocols import build_protocol
@@ -35,18 +41,59 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 _VERDICT_MAP = {
     FlagVerdict.ACCEPTED: FlagStatus.ACCEPTED,
     FlagVerdict.REJECTED: FlagStatus.REJECTED,
-    FlagVerdict.ERROR: FlagStatus.ERROR,
 }
 
-_NON_RETRYABLE_HTTP = (400, 401, 403, 404)
 _APPLY_CHUNK_SIZE = 1000
+_RESPONSE_LIMIT = 4000
 
 
-def _is_retryable_error(response: str) -> bool:
-    text = (response or "").lower()
-    if any(f"http {code}" in text for code in _NON_RETRYABLE_HTTP):
-        return False
-    return True
+@dataclass(slots=True)
+class BatchOutcome:
+    rows: list[dict[str, object]] = field(default_factory=list)
+    accepted: int = 0
+    rejected: int = 0
+    retry: int = 0
+    sample_error: str | None = None
+
+
+def plan_updates(
+    flags: list[tuple[int, str]],
+    outcomes_by_flag: dict[str, tuple[str, str]],
+    now: datetime,
+) -> BatchOutcome:
+    """Turn protocol verdicts for (id, flag) pairs into row updates."""
+    out = BatchOutcome()
+    for flag_id, flag in flags:
+        verdict, response = outcomes_by_flag.get(
+            flag, (FlagVerdict.ERROR, "no verdict from protocol")
+        )
+        response = (response or "")[:_RESPONSE_LIMIT]
+        status = _VERDICT_MAP.get(verdict)
+        if status is None:
+            out.retry += 1
+            out.sample_error = out.sample_error or response
+            out.rows.append(
+                {
+                    "flag_id": flag_id,
+                    "status_value": FlagStatus.QUEUED.value,
+                    "response_value": response,
+                    "submitted_at_value": None,
+                }
+            )
+            continue
+        if status is FlagStatus.ACCEPTED:
+            out.accepted += 1
+        else:
+            out.rejected += 1
+        out.rows.append(
+            {
+                "flag_id": flag_id,
+                "status_value": status.value,
+                "response_value": response,
+                "submitted_at_value": now,
+            }
+        )
+    return out
 
 
 def _chunks(rows: list[dict[str, object]], size: int) -> Iterator[list[dict[str, object]]]:
@@ -54,68 +101,44 @@ def _chunks(rows: list[dict[str, object]], size: int) -> Iterator[list[dict[str,
         yield rows[i : i + size]
 
 
-async def _claim_batch(batch_size: int) -> list[Flag]:
+async def _claim_batch(batch_size: int, flag_lifetime: int) -> list[tuple[int, str]]:
+    now = datetime.now(UTC)
     async with session_scope() as sess:
         q = (
-            select(Flag)
-            .where(Flag.status == FlagStatus.QUEUED)
-            .order_by(Flag.captured_at.asc())
+            select(Flag.id, Flag.flag)
+            .where(
+                Flag.status == FlagStatus.QUEUED,
+                # Leave already-dead flags to the expirer instead of
+                # spending jury rate limit on them.
+                Flag.captured_at >= now - timedelta(seconds=flag_lifetime),
+            )
+            .order_by(Flag.attempts.asc(), Flag.captured_at.asc())
             .limit(batch_size)
             .with_for_update(skip_locked=True)
         )
-        rows = (await sess.execute(q)).scalars().all()
+        rows = [(r.id, r.flag) for r in (await sess.execute(q)).all()]
         if not rows:
             return []
-        ids = [f.id for f in rows]
-        now = datetime.now(UTC)
         await sess.execute(
             update(Flag)
-            .where(Flag.id.in_(ids))
+            .where(Flag.id.in_([flag_id for flag_id, _ in rows]))
             .values(status=FlagStatus.PENDING, submitted_at=now)
         )
-        # Detach so the caller can read attributes after the session closes.
-        for f in rows:
-            sess.expunge(f)
-    return list(rows)
+    return rows
 
 
-async def _apply_results(flags: list[Flag], outcomes_by_flag: dict[str, tuple[str, str]]) -> None:
-    rows: list[dict[str, object]] = []
-    now = datetime.now(UTC)
-    for f in flags:
-        verdict, response = outcomes_by_flag.get(
-            f.flag, (FlagVerdict.ERROR, "no verdict from protocol")
-        )
-        if verdict == FlagVerdict.ERROR and _is_retryable_error(response):
-            rows.append(
-                {
-                    "flag_id": f.id,
-                    "status_value": FlagStatus.QUEUED.value,
-                    "response_value": response[:4000],
-                    "submitted_at_value": None,
-                }
-            )
-            continue
-        new_status = _VERDICT_MAP.get(verdict, FlagStatus.ERROR)
-        rows.append(
-            {
-                "flag_id": f.id,
-                "status_value": new_status.value,
-                "response_value": response[:4000],
-                "submitted_at_value": now,
-            }
-        )
-
+async def _apply(rows: list[dict[str, object]]) -> None:
     if not rows:
         return
-
+    table = Flag.__table__
     stmt = (
-        update(Flag.__table__)
-        .where(Flag.id == bindparam("flag_id"))
+        update(table)
+        .where(table.c.id == bindparam("flag_id"))
         .values(
             status=bindparam("status_value"),
             response=bindparam("response_value"),
             submitted_at=bindparam("submitted_at_value"),
+            attempts=table.c.attempts + 1,
         )
     )
     async with session_scope() as sess:
@@ -123,19 +146,8 @@ async def _apply_results(flags: list[Flag], outcomes_by_flag: dict[str, tuple[st
             await sess.execute(stmt, chunk)
 
 
-async def _rollback_pending(flags: list[Flag]) -> None:
-    if not flags:
-        return
-    async with session_scope() as sess:
-        await sess.execute(
-            update(Flag)
-            .where(Flag.id.in_([f.id for f in flags]))
-            .values(status=FlagStatus.QUEUED)
-        )
-
-
 async def _tick(cfg: FarmConfig) -> bool:
-    batch = await _claim_batch(cfg.submitter.batch_size)
+    batch = await _claim_batch(cfg.submitter.batch_size, cfg.flag_lifetime)
     if not batch:
         return False
 
@@ -145,19 +157,41 @@ async def _tick(cfg: FarmConfig) -> bool:
 
     try:
         proto = build_protocol(proto_name, **proto_kwargs)
-        results = await proto.submit([f.flag for f in batch])
-    except Exception:
-        log.exception("protocol crashed; requeueing batch")
-        await _rollback_pending(batch)
-        return True
+        results = await proto.submit([flag for _, flag in batch])
+        by_flag = {r.flag: (r.verdict, r.response) for r in results}
+    except Exception as exc:
+        log.exception("protocol '%s' crashed; requeueing batch", proto_name)
+        message = f"protocol crashed: {exc!r}"
+        by_flag = {flag: (FlagVerdict.ERROR, message) for _, flag in batch}
 
-    by_flag = {r.flag: (r.verdict, r.response) for r in results}
-    await _apply_results(batch, by_flag)
+    outcome = plan_updates(batch, by_flag, datetime.now(UTC))
+    await _apply(outcome.rows)
+
+    if outcome.retry and not (outcome.accepted or outcome.rejected):
+        # Nothing got a verdict — the jury is down or refuses our requests
+        # (wrong token / team id). Shout: this costs points until fixed.
+        log.warning(
+            "jury gave no verdict for any of %d flags via '%s' (e.g. %r) — "
+            "check protocols.%s in config.yml; flags stay queued",
+            len(batch), proto_name, outcome.sample_error, proto_name,
+        )
+        await events.publish(
+            "submitter_error",
+            {"protocol": proto_name, "flags": len(batch), "error": outcome.sample_error},
+        )
+    await events.publish(
+        "submit",
+        {
+            "protocol": proto_name,
+            "accepted": outcome.accepted,
+            "rejected": outcome.rejected,
+            "retry": outcome.retry,
+        },
+    )
     return True
 
 
 async def main() -> None:
-    # Make sure the config is loaded before the loop, and re-read on SIGHUP.
     reload_config()
     # The workers can outrace the API container's lifespan migrations, so
     # they ensure the schema themselves. `create_all` is idempotent.
@@ -175,16 +209,13 @@ async def main() -> None:
 
     log.info("submitter started")
     while not stop.is_set():
-        cfg = reload_config()
-        had_work = False
+        cfg = get_config()
         try:
             had_work = await _tick(cfg)
         except Exception:
             log.exception("submitter tick failed")
-        sleep_for = cfg.submitter.period if had_work else max(
-            cfg.submitter.period,
-            cfg.submitter.idle_period,
-        )
+            had_work = True  # back off for a full period, don't spin on a broken DB
+        sleep_for = cfg.submitter.period if had_work else cfg.submitter.idle_period
         try:
             await asyncio.wait_for(stop.wait(), timeout=sleep_for)
         except asyncio.TimeoutError:

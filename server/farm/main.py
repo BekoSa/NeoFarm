@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -17,21 +19,35 @@ from .api import teams as teams_api
 from .api import ws as ws_api
 from .config import get_config, get_settings
 from .db import init_db
+from .events import forward_to_hub
 from .protocols import available_protocols
+from .ws import hub
 
 log = logging.getLogger("farm.api")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
+_INSECURE_TOKENS = {"", "change-me-please"}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if get_settings().farm_api_token in _INSECURE_TOKENS:
+        # The farm sits on the game network: anyone guessing the default
+        # token could read, delete or poison our flags.
+        raise RuntimeError("FARM_API_TOKEN is empty or the default; set a real one in .env")
     log.info("loading protocols")
     available_protocols()
     log.info("loading config from %s", get_settings().farm_config)
     get_config()
     log.info("running schema migrations")
     await init_db()
-    yield
+    relay_task = asyncio.create_task(forward_to_hub(hub))
+    try:
+        yield
+    finally:
+        relay_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await relay_task
 
 
 app = FastAPI(title="Farm", version="0.1.0", lifespan=lifespan)
@@ -39,9 +55,11 @@ app = FastAPI(title="Farm", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
-    allow_credentials=True,
+    # Auth is a header, not a cookie — no credentialed CORS needed.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Total-Count"],
 )
 
 app.include_router(flags_api.router)

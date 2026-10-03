@@ -27,11 +27,11 @@ export function clearProfile() {
 }
 
 export function defaultUrl(): string {
-  // Vite injects this at build time; falls back to current origin so a
-  // single-origin deploy "just works".
+  // Vite injects this at build time; by default it's empty and the UI uses
+  // its own origin — the bundled nginx proxies /api and /ws to the server.
   const fromEnv = (import.meta.env.VITE_API_BASE as string) || "";
   if (fromEnv) return fromEnv;
-  return window.location.origin.replace(/:\d+$/, ":5000");
+  return window.location.origin;
 }
 
 export function buildApi(profile: Profile): AxiosInstance {
@@ -121,8 +121,11 @@ export interface FarmConfig {
   round_length: number;
   protocol: string;
   protocols: Record<string, Record<string, unknown>>;
-  submitter: { period: number; batch_size: number };
+  submitter: { period: number; idle_period: number; batch_size: number };
   // Mixed list: explicit {alias, ip} entries and/or {from, to, alias?, ip?}
-  // ranges. Use /api/teams if you want a flat, expanded list.
+  // ranges. Use /api/teams if you want the flat list of attack targets.
   teams: TeamEntry[];
+  // Aliases or IPs never attacked (own team, NOP team).
+  exclude_teams: string[];
+  runs_retention: number;
 }

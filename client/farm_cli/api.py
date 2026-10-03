@@ -48,11 +48,12 @@ class FarmClient:
         *,
         host: str | None = None,
         notes: str | None = None,
-        enabled: bool = True,
     ) -> dict[str, Any]:
+        """Register / heartbeat. Returns the exploit, including the
+        `enabled` switch controlled from the UI (never overwritten here)."""
         r = await self._client.post(
             "/api/exploits",
-            json={"name": name, "host": host, "notes": notes, "enabled": enabled},
+            json={"name": name, "host": host, "notes": notes},
         )
         r.raise_for_status()
         return r.json()

@@ -1,8 +1,8 @@
 """In-process pub/sub for the WebSocket feed.
 
-We don't need Redis pubsub here — there's exactly one API process per
-deployment. Workers that want to push live events POST /api/internal/event
-which calls publish() on the API hub.
+API handlers publish here directly. Worker events (submit verdicts,
+expiries) arrive via Redis pub/sub and are re-published by
+`events.forward_to_hub`, started in the API lifespan.
 """
 
 from __future__ import annotations

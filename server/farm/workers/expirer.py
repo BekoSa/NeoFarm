@@ -1,9 +1,13 @@
-"""Expirer — moves stale queued flags to EXPIRED.
+"""Expirer — moves stale queued flags to EXPIRED and purges old run reports.
 
 A flag is stale when it was captured more than `flag_lifetime` seconds ago
 and is still QUEUED/PENDING. Submitting an expired flag is pointless: most
 juries will reject it and we burn rate-limit slots that could go to fresh
 flags instead.
+
+Run reports (stdout/stderr tails) are only useful while debugging the
+current state of an exploit, so ones older than `runs_retention` seconds
+are deleted to keep the table small.
 """
 
 from __future__ import annotations
@@ -13,11 +17,12 @@ import logging
 import signal
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, update
+from sqlalchemy import delete, or_, update
 
-from ..config import reload_config
+from .. import events
+from ..config import get_config, reload_config
 from ..db import init_db, session_scope
-from ..models import Flag, FlagStatus
+from ..models import Flag, FlagStatus, Run
 
 log = logging.getLogger("farm.expirer")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -25,8 +30,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname
 _PENDING_LEASE_SECONDS = 60.0
 
 
-async def _expire_once() -> tuple[int, int]:
-    cfg = reload_config()
+async def _expire_once() -> tuple[int, int, int]:
+    """Returns (expired flags, requeued stale claims, purged runs)."""
+    cfg = get_config()
     now = datetime.now(UTC)
     lifetime_cutoff = now - timedelta(seconds=cfg.flag_lifetime)
     pending_cutoff = now - timedelta(
@@ -47,7 +53,7 @@ async def _expire_once() -> tuple[int, int]:
             )
             .returning(Flag.id)
         )
-        result = await sess.execute(
+        expired = await sess.execute(
             update(Flag)
             .where(
                 Flag.status.in_([FlagStatus.QUEUED, FlagStatus.PENDING]),
@@ -56,7 +62,15 @@ async def _expire_once() -> tuple[int, int]:
             .values(status=FlagStatus.EXPIRED)
             .returning(Flag.id)
         )
-        return len(result.fetchall()), len(requeued.fetchall())
+        purged = 0
+        if cfg.runs_retention > 0:
+            res = await sess.execute(
+                delete(Run).where(
+                    Run.started_at < now - timedelta(seconds=cfg.runs_retention)
+                )
+            )
+            purged = res.rowcount or 0
+        return len(expired.fetchall()), len(requeued.fetchall()), purged
 
 
 async def main() -> None:
@@ -77,11 +91,14 @@ async def main() -> None:
     log.info("expirer started")
     while not stop.is_set():
         try:
-            expired, requeued = await _expire_once()
+            expired, requeued, purged = await _expire_once()
             if expired:
                 log.info("expired %d flags", expired)
+                await events.publish("expired", {"flags": expired})
             if requeued:
                 log.info("requeued %d stale pending flags", requeued)
+            if purged:
+                log.info("purged %d old run reports", purged)
         except Exception:
             log.exception("expire tick failed")
         try:

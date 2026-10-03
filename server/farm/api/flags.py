@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import random
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import desc, select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +24,11 @@ router = APIRouter(prefix="/api/flags", tags=["flags"])
 
 _INGEST_RETRIES = 5
 _INGEST_CHUNK_SIZE = 1000
+_FLAG_MAX_LEN = 256  # models.Flag.flag column width
+
+
+def _clip(value: str | None, limit: int) -> str | None:
+    return value[:limit] if value else value
 
 
 def _dedupe_and_sort_rows(
@@ -105,10 +110,12 @@ async def submit_flags(
     will regex against the configured `flag_format`.
     """
     cfg = get_config()
+    alias_by_ip = {t.ip: t.alias for t in cfg.expanded_teams()}
     candidates: list[dict[str, str | None]] = []
     invalid = 0
 
     for item in payload.items:
+        team = item.team or alias_by_ip.get(item.target_ip or "")
         flags: list[str] = []
         if item.flag:
             if is_well_formed(item.flag, cfg.flag_format):
@@ -119,13 +126,17 @@ async def submit_flags(
             flags.extend(extract_flags(item.output, cfg.flag_format))
 
         for f in flags:
+            if len(f) > _FLAG_MAX_LEN:
+                # Would fail the whole insert — and every flag sent with it.
+                invalid += 1
+                continue
             candidates.append(
                 {
                     "flag": f,
                     "status": models.FlagStatus.QUEUED.value,
-                    "sploit": item.sploit,
-                    "team": item.team,
-                    "target_ip": item.target_ip,
+                    "sploit": _clip(item.sploit, 128),
+                    "team": _clip(team, 64),
+                    "target_ip": _clip(item.target_ip, 64),
                 }
             )
 
@@ -161,10 +172,11 @@ async def submit_manual(
         {
             "flag": f,
             "status": models.FlagStatus.QUEUED.value,
-            "sploit": payload.sploit or "manual",
-            "team": payload.team,
+            "sploit": _clip(payload.sploit or "manual", 128),
+            "team": _clip(payload.team, 64),
         }
         for f in flags
+        if len(f) <= _FLAG_MAX_LEN
     ]
     new, dup = await _ingest_flags(sess, candidates)
     await sess.commit()
@@ -173,25 +185,93 @@ async def submit_manual(
     return schemas.FlagSubmitResponse(new=new, duplicate=dup, invalid=0)
 
 
+_LIKE_ESCAPE = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
+
+
 @router.get("", response_model=list[schemas.FlagOut], dependencies=[Depends(require_token)])
 async def list_flags(
+    response: Response,
     status: str | None = Query(default=None),
     sploit: str | None = None,
     team: str | None = None,
+    q: str | None = Query(default=None, description="Substring of the flag."),
     limit: int = Query(default=200, le=2000),
     offset: int = 0,
     sess: AsyncSession = Depends(get_session),
 ) -> list[models.Flag]:
-    q = select(models.Flag).order_by(desc(models.Flag.captured_at))
+    """Browse flags; the unpaginated match count is in `X-Total-Count`."""
+    conds = []
     if status:
-        q = q.where(models.Flag.status == status)
+        conds.append(models.Flag.status == status)
     if sploit:
-        q = q.where(models.Flag.sploit == sploit)
+        conds.append(models.Flag.sploit == sploit)
     if team:
-        q = q.where(models.Flag.team == team)
-    q = q.limit(limit).offset(offset)
-    res = await sess.execute(q)
+        conds.append(models.Flag.team == team)
+    if q:
+        conds.append(models.Flag.flag.ilike(f"%{q.translate(_LIKE_ESCAPE)}%", escape="\\"))
+
+    total = await sess.scalar(select(func.count()).select_from(models.Flag).where(*conds))
+    response.headers["X-Total-Count"] = str(total or 0)
+
+    res = await sess.execute(
+        select(models.Flag)
+        .where(*conds)
+        .order_by(desc(models.Flag.captured_at))
+        .limit(limit)
+        .offset(offset)
+    )
     return list(res.scalars().all())
+
+
+_BULK_REQUEUE_STATUSES = {
+    models.FlagStatus.REJECTED.value,
+    models.FlagStatus.ERROR.value,
+    models.FlagStatus.EXPIRED.value,
+}
+
+
+@router.post(
+    "/requeue",
+    response_model=schemas.FlagRequeueResponse,
+    dependencies=[Depends(require_token)],
+)
+async def requeue_flags(
+    payload: schemas.FlagRequeueRequest,
+    sess: AsyncSession = Depends(get_session),
+) -> schemas.FlagRequeueResponse:
+    """Requeue every matching flag that the jury may still accept.
+
+    `captured_at` is kept, so anything past `flag_lifetime` is skipped —
+    resubmitting it would only waste the jury rate limit.
+    """
+    if payload.status not in _BULK_REQUEUE_STATUSES:
+        raise HTTPException(
+            400, f"status must be one of {sorted(_BULK_REQUEUE_STATUSES)}"
+        )
+    cutoff = datetime.now(UTC) - timedelta(seconds=get_config().flag_lifetime)
+    stmt = (
+        update(models.Flag)
+        .where(
+            models.Flag.status == payload.status,
+            models.Flag.captured_at >= cutoff,
+        )
+        .values(
+            status=models.FlagStatus.QUEUED,
+            submitted_at=None,
+            response=None,
+            attempts=0,
+        )
+        .returning(models.Flag.id)
+    )
+    if payload.sploit:
+        stmt = stmt.where(models.Flag.sploit == payload.sploit)
+    if payload.team:
+        stmt = stmt.where(models.Flag.team == payload.team)
+    requeued = len((await sess.execute(stmt)).fetchall())
+    await sess.commit()
+    if requeued:
+        await hub.publish("requeue", {"flags": requeued, "from": payload.status})
+    return schemas.FlagRequeueResponse(requeued=requeued)
 
 
 @router.delete(
@@ -224,6 +304,9 @@ async def requeue_flag(
     flag.status = models.FlagStatus.QUEUED
     flag.submitted_at = None
     flag.response = None
+    flag.attempts = 0
+    # A manual single-flag requeue is an explicit "try this one again":
+    # restart its lifetime so the expirer doesn't retire it immediately.
     flag.captured_at = datetime.now(UTC)
     await sess.commit()
     return {"ok": True}

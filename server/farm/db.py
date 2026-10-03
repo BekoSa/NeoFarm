@@ -22,6 +22,13 @@ from .config import get_settings
 _SCHEMA_LOCK_KEY = 0x6661726D5F696E69  # "farm_ini"
 
 
+# `create_all` never alters existing tables, so columns added after the
+# first release are patched in here for persistent volumes.
+_COLUMN_MIGRATIONS = (
+    "ALTER TABLE flags ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+)
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -104,6 +111,8 @@ async def init_db() -> None:
                     {"k": _SCHEMA_LOCK_KEY},
                 )
                 await conn.run_sync(Base.metadata.create_all)
+                for ddl in _COLUMN_MIGRATIONS:
+                    await conn.execute(text(ddl))
                 await conn.run_sync(_create_known_indexes)
             return
         except Exception as exc:

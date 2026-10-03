@@ -1,4 +1,4 @@
-.PHONY: farm-cli.pyz clean-cli help
+.PHONY: farm-cli.pyz clean-cli help test
 
 PY ?= python3
 PIP ?= $(PY) -m pip
@@ -7,6 +7,7 @@ help:
 	@echo "Targets:"
 	@echo "  farm-cli.pyz    build dist/farm-cli.pyz (self-contained CLI)"
 	@echo "  clean-cli       remove the local CLI build outputs"
+	@echo "  test            run server + client unit tests"
 	@echo ""
 	@echo "Note: the docker image already builds farm-cli.pyz inside the"
 	@echo "cli-builder stage and serves it from GET /install/farm-cli."
@@ -32,3 +33,7 @@ farm-cli.pyz:
 
 clean-cli:
 	rm -rf build/cli-pyz dist/farm-cli.pyz
+
+# Needs: pip install -e ./server -e ./client pytest
+test:
+	$(PY) -m pytest -q server/tests client/tests

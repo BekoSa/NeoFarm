@@ -1,73 +1,59 @@
 # =============================================================================
-# Farm configuration. Hot-reloadable via the UI / API; restarts not required.
+# Farm configuration — AltayCTF (HTTP jury).
+# Hot-reloaded by every service: save from the UI or edit this file, no
+# restart. A broken edit is ignored and the last good config stays active.
+# Lines marked CHECK are guesses — confirm them from the game rules.
 # =============================================================================
 
-# Regex used to extract a flag from arbitrary exploit stdout.
-# Examples: Forcad/RuCTF default looks like "ABCDEFG12345...="
-flag_format: "[A-Z0-9]{31}="
+# Regex used to extract flags from exploit stdout.
+# CHECK: the real AltayCTF flag alphabet/length (the jury flags start "alt_").
+flag_format: "alt_[A-Za-z0-9_+/=-]{8,128}"
 
-# Flag time-to-live, seconds. Older unsubmitted flags are marked EXPIRED.
-flag_lifetime: 900
+# Flag time-to-live, seconds. Older unsubmitted flags become EXPIRED.
+flag_lifetime: 240              # CHECK: from the rules
 
-# Round duration, seconds. Used by clients to schedule exploit launches.
-round_length: 60
+# Round duration, seconds. Clients launch exploits once per round.
+round_length: 60                # CHECK: from the rules
 
-# Submission protocol used to send flags to the jury.
-# Must match one of the modules under server/protocols/ (file stem).
-protocol: dummy
+# Submission protocol — a file stem under server/farm/protocols/.
+protocol: altayctf_http
 
-# Per-protocol settings. Each key here is forwarded to that protocol's
-# constructor as **kwargs.
+# Per-protocol settings, forwarded to the protocol class as kwargs.
 protocols:
-  forcad:
-    # Forcad accepts JSON-array submissions over HTTP.
-    url: "http://10.10.10.10:8080/flags"
-    team_token: "PUT-YOUR-TEAM-TOKEN-HERE"
-
-  faustctf:
-    host: "submission.faustctf.example"
-    port: 31337
-    team_token: ""
-
-  ructf:
-    url: "http://monitor.ructf.example/flag"
-    team_token: ""
-
+  altayctf_http:
+    # POST <url>/api/v1/flags  {"flags": [...]}
+    url: http://10.80.80.10
+    timeout: 5
+    # headers: {X-Team-Token: "..."}   # only if the jury asks for auth
+  altayctf_tcp:
+    # Fallback: one flag per line over raw TCP.
+    host: 10.80.80.10
+    port: 3333
+    timeout: 5
+  ctf01d:
+    url: http://10.10.100.100
+    team_id: t10
+    timeout: 5
   dummy:
-    # Marks every received flag as ACCEPTED with a fake response. Useful for
-    # local testing without a real jury.
     accept_rate: 1.0
 
-# Flag submission throttle. The submitter will collect up to `batch_size`
-# flags and call the protocol no more often than `period` seconds.
+# The submitter sends up to `batch_size` flags at most every `period`
+# seconds; while the queue is empty it checks every `idle_period` seconds.
 submitter:
-  period: 5            # seconds between submission rounds
-  idle_period: 0.5     # backoff when the queue is empty
-  batch_size: 100      # max flags per submission call
+  period: 5
+  idle_period: 0.5
+  batch_size: 100
 
-# Teams. The CLI looks up a team's IP by alias; flags are tagged with the
-# team alias they were stolen from for nicer stats.
-#
-# Two forms are supported and may be mixed freely:
-#
-#   1. Explicit  — one entry per team:
-#        - alias: team-1
-#          ip: 10.60.1.2
-#
-#   2. Range / template — one entry expands into many. ``{i}`` is the
-#      team number; format-spec works (``{i:02d}`` zero-pads to 2 digits).
-#      The defaults are alias="team-{i}" and ip="10.60.{i}.2".
-#        - from: 1
-#          to: 20
-#        - from: 1
-#          to: 10
-#          alias: "team-{i:02d}"
-#          ip: "10.62.{i}.2"
-#
-# Later entries win on alias clash, so you can override one team in a range
-# by adding an explicit entry after it.
+# Teams. Explicit `{alias, ip}` entries and/or ranges where {i} is the team
+# number ({i:02d} zero-pads). Later entries win on alias clash.
 teams:
-  - alias: team-1
-    ip: 10.60.1.2
-  - alias: team-2
-    ip: 10.60.2.2
+  - from: 1                     # CHECK: number of teams
+    to: 22
+    alias: "team-{i:02d}"
+    ip: "10.10.{i}.3"           # CHECK: AltayCTF vulnbox addressing
+
+# Never attacked — put our own team (and the NOP team) here, by alias or IP.
+exclude_teams: []               # CHECK: e.g. ["team-10"]
+
+# Exploit run reports older than this many seconds are purged (0 = keep).
+runs_retention: 7200

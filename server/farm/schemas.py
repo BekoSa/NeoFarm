@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -42,6 +40,19 @@ class FlagSubmitResponse(BaseModel):
     invalid: int
 
 
+class FlagRequeueRequest(BaseModel):
+    """Bulk requeue filter — e.g. every ERROR/REJECTED flag after fixing
+    the jury credentials. Only flags still within `flag_lifetime` move."""
+
+    status: str
+    sploit: str | None = None
+    team: str | None = None
+
+
+class FlagRequeueResponse(BaseModel):
+    requeued: int
+
+
 class ManualFlagsRequest(BaseModel):
     text: str = Field(..., description="Free-form text containing flags to submit.")
     sploit: str | None = "manual"
@@ -60,10 +71,22 @@ class ExploitOut(BaseModel):
 
 
 class ExploitRegister(BaseModel):
+    """Client heartbeat. `enabled` is left alone unless explicitly sent, so
+    a restarted client doesn't re-enable a sploit switched off in the UI."""
+
     name: str
     host: str | None = None
     notes: str | None = None
-    enabled: bool = True
+    enabled: bool | None = None
+
+
+class ExploitUpdate(BaseModel):
+    """Partial update from the UI; omitted fields are kept."""
+
+    name: str | None = None
+    host: str | None = None
+    notes: str | None = None
+    enabled: bool | None = None
 
 
 class RunReport(BaseModel):
@@ -114,15 +137,3 @@ class StatsOut(BaseModel):
     by_team: list[StatsBucket]
     last_minute: StatsBucket
     last_hour: StatsBucket
-
-
-class ConfigPayload(BaseModel):
-    """Raw shape mirroring config.yml. Extra keys are kept by the validator."""
-
-    flag_format: str
-    flag_lifetime: int
-    round_length: int
-    protocol: str
-    protocols: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    submitter: dict[str, Any] = Field(default_factory=dict)
-    teams: list[dict[str, Any]] = Field(default_factory=list)

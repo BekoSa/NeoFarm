@@ -5,6 +5,9 @@ import { Card } from "../components/Card";
 import { StatusPill } from "../components/StatusPill";
 
 const STATUSES = ["", "QUEUED", "PENDING", "ACCEPTED", "REJECTED", "EXPIRED", "DUPLICATE", "ERROR"];
+// Statuses the bulk "requeue matching" action accepts (see POST /api/flags/requeue).
+const REQUEUEABLE = new Set(["REJECTED", "ERROR", "EXPIRED"]);
+const PAGE = 300;
 
 function useDebounced<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -21,20 +24,43 @@ export function Flags({ profile }: { profile: Profile }) {
   const [status, setStatus] = useState("");
   const [sploit, setSploit] = useState("");
   const [team, setTeam] = useState("");
+  const [search, setSearch] = useState("");
   // Debounce free-form text inputs so typing doesn't fire one request per keystroke.
   const sploitQuery = useDebounced(sploit, 300);
   const teamQuery = useDebounced(team, 300);
+  const searchQuery = useDebounced(search, 300);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const flags = useQuery({
-    queryKey: ["flags", profile.url, status, sploitQuery, teamQuery],
+    queryKey: ["flags", profile.url, status, sploitQuery, teamQuery, searchQuery],
     queryFn: async () => {
-      const params: Record<string, string> = { limit: "300" };
+      const params: Record<string, string> = { limit: String(PAGE) };
       if (status) params.status = status;
       if (sploitQuery) params.sploit = sploitQuery;
       if (teamQuery) params.team = teamQuery;
-      return (await api.get<FlagOut[]>("/api/flags", { params })).data;
+      if (searchQuery) params.q = searchQuery;
+      const res = await api.get<FlagOut[]>("/api/flags", { params });
+      const total = Number(res.headers["x-total-count"] ?? res.data.length);
+      return { rows: res.data, total };
     },
     refetchInterval: 5_000,
+  });
+
+  const requeueMatching = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post<{ requeued: number }>("/api/flags/requeue", {
+          status,
+          sploit: sploitQuery || null,
+          team: teamQuery || null,
+        })
+      ).data,
+    onSuccess: (data) => {
+      setNotice(`requeued ${data.requeued} flag(s)`);
+      setTimeout(() => setNotice(null), 3000);
+      qc.invalidateQueries({ queryKey: ["flags"] });
+    },
+    onError: (e: any) => setNotice(e?.response?.data?.detail || e.message),
   });
 
   const requeue = useMutation({
@@ -50,7 +76,35 @@ export function Flags({ profile }: { profile: Profile }) {
     <Card
       title="Flags"
       right={
-        <div className="flex gap-2 text-xs">
+        <div className="flex gap-2 text-xs items-center">
+          {notice && <span className="text-emerald-400">{notice}</span>}
+          {flags.data && (
+            <span className="text-muted mono">
+              {flags.data.rows.length < flags.data.total
+                ? `${flags.data.rows.length} of ${flags.data.total}`
+                : flags.data.total}
+            </span>
+          )}
+          {REQUEUEABLE.has(status) && (
+            <button
+              onClick={() => {
+                if (confirm(`Requeue every ${status} flag matching the filters (still within flag_lifetime)?`)) {
+                  requeueMatching.mutate();
+                }
+              }}
+              disabled={requeueMatching.isPending}
+              className="px-2 py-1 rounded border border-border hover:bg-panel2 disabled:opacity-50"
+              title="Send these flags to the jury again — e.g. after fixing the jury token"
+            >
+              requeue matching
+            </button>
+          )}
+          <input
+            placeholder="flag contains…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="bg-panel2 border border-border rounded px-2 py-1 mono w-40"
+          />
           <select
             value={status}
             onChange={(e) => setStatus(e.target.value)}
@@ -91,7 +145,7 @@ export function Flags({ profile }: { profile: Profile }) {
             </tr>
           </thead>
           <tbody>
-            {flags.data?.map((f) => (
+            {flags.data?.rows.map((f) => (
               <tr key={f.id} className="border-t border-border align-top">
                 <td className="py-1 mono">{f.flag}</td>
                 <td className="py-1"><StatusPill status={f.status} /></td>
@@ -119,7 +173,7 @@ export function Flags({ profile }: { profile: Profile }) {
                 </td>
               </tr>
             ))}
-            {flags.data && flags.data.length === 0 && (
+            {flags.data && flags.data.rows.length === 0 && (
               <tr>
                 <td colSpan={7} className="text-muted text-center py-6">
                   no flags
