@@ -23,6 +23,9 @@ from .ws import Hub
 log = logging.getLogger("farm.events")
 
 CHANNEL = "farm:events"
+# Running counters that aren't backed by DB rows (e.g. duplicates are dropped
+# at ingest, never stored), kept in Redis so all processes share one value.
+DEDUP_KEY = "farm:stats:deduplicated"
 
 _publisher: aioredis.Redis | None = None
 
@@ -43,6 +46,26 @@ async def publish(kind: str, payload: dict[str, Any]) -> None:
         )
     except Exception as exc:
         log.debug("event publish failed: %s", exc)
+
+
+async def bump_counter(key: str, n: int) -> None:
+    """Best-effort INCRBY of a shared counter; a dead Redis must not stall."""
+    if n <= 0:
+        return
+    try:
+        await _publisher_client().incrby(key, n)
+    except Exception as exc:
+        log.debug("counter bump failed: %s", exc)
+
+
+async def read_counter(key: str) -> int:
+    """Best-effort read of a shared counter; 0 if unavailable."""
+    try:
+        value = await _publisher_client().get(key)
+        return int(value) if value else 0
+    except Exception as exc:
+        log.debug("counter read failed: %s", exc)
+        return 0
 
 
 async def forward_to_hub(hub: Hub) -> None:

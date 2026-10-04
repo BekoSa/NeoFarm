@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import models, schemas
+from .. import events, models, schemas
 from ..config import get_config
 from ..core.flag_extractor import extract_flags, is_well_formed
 from ..db import get_session
@@ -153,6 +153,7 @@ async def submit_flags(
 
     new, dup = await _ingest_flags(sess, candidates)
     await sess.commit()
+    await events.bump_counter(events.DEDUP_KEY, dup)
 
     if invalid and rejected_sample:
         log.info(
@@ -201,6 +202,7 @@ async def submit_manual(
         )
     new, dup = await _ingest_flags(sess, candidates)
     await sess.commit()
+    await events.bump_counter(events.DEDUP_KEY, dup)
     if new:
         await hub.publish("flags", {"new": new, "duplicate": dup, "manual": True})
     return schemas.FlagSubmitResponse(new=new, duplicate=dup, invalid=invalid)

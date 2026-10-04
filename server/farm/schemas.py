@@ -138,3 +138,6 @@ class StatsOut(BaseModel):
     by_team: list[StatsBucket]
     last_minute: StatsBucket
     last_hour: StatsBucket
+    # Running total of duplicate captures dropped at ingest (not stored as
+    # rows, so this comes from a counter, not the flags table).
+    deduplicated: int = 0

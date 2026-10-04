@@ -99,6 +99,7 @@ export interface StatsOut {
   by_team: StatsBucket[];
   last_minute: StatsBucket;
   last_hour: StatsBucket;
+  deduplicated: number;
 }
 
 export interface TeamOut {

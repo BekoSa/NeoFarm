@@ -42,7 +42,8 @@ export function Dashboard({ profile }: { profile: Profile }) {
         <Big title="Queued" value={t.queued} color="text-yellow-300" />
         <Big title="Rejected" value={t.rejected} color="text-red-400" />
         <Big title="Expired" value={t.expired} color="text-gray-300" />
-        <Big title="Duplicate" value={t.duplicate} color="text-purple-300" />
+        <Big title="Deduplicated" value={s.deduplicated} color="text-purple-300"
+             hint="repeats dropped at ingest" />
         <Big title="Error" value={t.error} color="text-pink-300" />
       </div>
 
@@ -120,7 +121,6 @@ const SEGMENTS: { key: keyof StatsBucket; cls: string; label: string }[] = [
   { key: "queued", cls: "bg-yellow-400", label: "queued" },
   { key: "rejected", cls: "bg-red-500", label: "rejected" },
   { key: "error", cls: "bg-pink-500", label: "error" },
-  { key: "duplicate", cls: "bg-purple-500", label: "duplicate" },
   { key: "expired", cls: "bg-gray-500", label: "expired" },
 ];
 
@@ -154,12 +154,11 @@ function StatusBar({ b, total }: { b: StatsBucket; total: number }) {
 
 function BucketRow({ b }: { b: StatsBucket }) {
   return (
-    <div className="grid grid-cols-3 sm:grid-cols-6 gap-3 text-sm">
+    <div className="grid grid-cols-3 sm:grid-cols-5 gap-3 text-sm">
       <Stat label="accepted" value={b.accepted} cls="text-emerald-400" />
       <Stat label="rejected" value={b.rejected} cls="text-red-400" />
       <Stat label="queued" value={b.queued} cls="text-yellow-300" />
       <Stat label="expired" value={b.expired} cls="text-gray-300" />
-      <Stat label="duplicate" value={b.duplicate} cls="text-purple-300" />
       <Stat label="error" value={b.error} cls="text-pink-300" />
     </div>
   );

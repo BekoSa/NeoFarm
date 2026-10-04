@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import models, schemas
+from .. import events, models, schemas
 from ..db import get_session
 from ..deps import require_token
 
@@ -155,4 +155,5 @@ async def _compute(sess: AsyncSession) -> schemas.StatsOut:
         by_team=by_team,
         last_minute=last_minute,
         last_hour=last_hour,
+        deduplicated=await events.read_counter(events.DEDUP_KEY),
     )
