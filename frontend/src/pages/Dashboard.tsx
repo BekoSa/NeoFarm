@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExploitOut, Profile, StatsBucket, StatsOut, TeamOut, useApi } from "../api/client";
 import { Card } from "../components/Card";
+import { SortHeader, useSort } from "../components/sortable";
 
 export function Dashboard({ profile }: { profile: Profile }) {
   const api = useApi(profile);
@@ -180,6 +181,16 @@ function BucketTable({ rows, keyLabel }: { rows: StatsBucket[]; keyLabel: string
     () => (needle ? rows.filter((r) => r.label.toLowerCase().includes(needle)) : rows),
     [rows, needle],
   );
+  const { sorted, sort } = useSort<StatsBucket>(
+    filtered,
+    {
+      label: (r) => r.label,
+      accepted: (r) => r.accepted,
+      rejected: (r) => r.rejected,
+      queued: (r) => r.queued,
+    },
+    { key: "accepted", dir: "desc" },
+  );
   if (rows.length === 0) {
     return <div className="text-muted text-sm">no data yet</div>;
   }
@@ -196,14 +207,14 @@ function BucketTable({ rows, keyLabel }: { rows: StatsBucket[]; keyLabel: string
         <table className="w-full text-sm">
           <thead className="text-muted sticky top-0 bg-panel">
             <tr>
-              <th className="text-left font-medium pb-2">{keyLabel}</th>
-              <th className="text-right font-medium pb-2">accepted</th>
-              <th className="text-right font-medium pb-2">rejected</th>
-              <th className="text-right font-medium pb-2">queued</th>
+              <SortHeader label={keyLabel} sortKey="label" sort={sort} className="pb-2" />
+              <SortHeader label="accepted" sortKey="accepted" sort={sort} align="right" className="pb-2" />
+              <SortHeader label="rejected" sortKey="rejected" sort={sort} align="right" className="pb-2" />
+              <SortHeader label="queued" sortKey="queued" sort={sort} align="right" className="pb-2" />
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r) => (
+            {sorted.map((r) => (
               <tr key={r.label} className="border-t border-border">
                 <td className="py-1 mono">{r.label}</td>
                 <td className="py-1 mono text-right text-emerald-400">{r.accepted}</td>
