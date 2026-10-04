@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { buildApi, clearProfile, defaultUrl, loadProfile, Profile, saveProfile } from "./api/client";
 import { Dashboard } from "./pages/Dashboard";
+import { Feed } from "./pages/Feed";
 import { Flags } from "./pages/Flags";
 import { Exploits } from "./pages/Exploits";
 import { Config } from "./pages/Config";
@@ -8,10 +9,11 @@ import { Manual } from "./pages/Manual";
 import { LiveBadge } from "./components/LiveBadge";
 import { InstallModal } from "./components/InstallModal";
 
-type Tab = "dashboard" | "flags" | "exploits" | "manual" | "config";
+type Tab = "dashboard" | "feed" | "flags" | "exploits" | "manual" | "config";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "feed", label: "Live feed" },
   { id: "flags", label: "Flags" },
   { id: "exploits", label: "Exploits" },
   { id: "manual", label: "Manual submit" },
@@ -29,6 +31,7 @@ export default function App() {
   return (
     <Shell profile={profile} onLogout={() => { clearProfile(); setProfile(null); }} tab={tab} setTab={setTab}>
       {tab === "dashboard" && <Dashboard profile={profile} />}
+      {tab === "feed" && <Feed profile={profile} />}
       {tab === "flags" && <Flags profile={profile} />}
       {tab === "exploits" && <Exploits profile={profile} />}
       {tab === "manual" && <Manual profile={profile} />}

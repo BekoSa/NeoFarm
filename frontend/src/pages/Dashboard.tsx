@@ -1,8 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExploitOut, Profile, StatsBucket, StatsOut, TeamOut, useApi } from "../api/client";
 import { Card } from "../components/Card";
-import { subscribe, FarmEvent } from "../api/ws";
 
 export function Dashboard({ profile }: { profile: Profile }) {
   const api = useApi(profile);
@@ -21,17 +20,6 @@ export function Dashboard({ profile }: { profile: Profile }) {
     queryFn: async () => (await api.get<TeamOut[]>("/api/teams")).data,
     refetchInterval: 30_000,
   });
-
-  const [feed, setFeed] = useState<FeedItem[]>([]);
-  const [live, setLive] = useState<"open" | "closed" | "error">("closed");
-  useEffect(() => {
-    let seq = 0;
-    return subscribe(
-      profile,
-      (e) => setFeed((prev) => [{ ...e, at: Date.now(), seq: seq++ }, ...prev].slice(0, 120)),
-      setLive,
-    );
-  }, [profile.url, profile.token]);
 
   if (!stats.data) {
     return <div className="text-muted">loading…</div>;
@@ -57,9 +45,19 @@ export function Dashboard({ profile }: { profile: Profile }) {
         <Big title="Error" value={t.error} color="text-pink-300" />
       </div>
 
-      <div className="col-span-12">
+      <div className="col-span-12 md:col-span-8">
         <Card title="Flag breakdown">
           <StatusBar b={t} total={total} />
+        </Card>
+      </div>
+      <div className="col-span-12 md:col-span-4">
+        <Card title="Fleet">
+          <div className="space-y-3">
+            <Line label="Exploits" value={`${enabled} on / ${exploits.data?.length ?? 0}`} />
+            <Line label="Target teams" value={String(teams.data?.length ?? 0)} />
+            <Line label="Accepted / 1m" value={String(s.last_minute.accepted)} cls="text-emerald-400" />
+            <Line label="Accepted / 1h" value={String(s.last_hour.accepted)} cls="text-emerald-400" />
+          </div>
         </Card>
       </div>
 
@@ -85,92 +83,14 @@ export function Dashboard({ profile }: { profile: Profile }) {
         </Card>
       </div>
 
-      <div className="col-span-12 md:col-span-4">
-        <Card title="Fleet">
-          <div className="space-y-3">
-            <Line label="Exploits" value={`${enabled} on / ${exploits.data?.length ?? 0}`} />
-            <Line label="Target teams" value={String(teams.data?.length ?? 0)} />
-            <Line label="Accepted / 1m" value={String(s.last_minute.accepted)} cls="text-emerald-400" />
-            <Line label="Accepted / 1h" value={String(s.last_hour.accepted)} cls="text-emerald-400" />
-          </div>
-        </Card>
-      </div>
-      <div className="col-span-12 md:col-span-8">
-        <Card title="Live feed" right={<LiveDot state={live} />}>
-          {feed.length === 0 && <div className="text-muted text-sm">waiting for events…</div>}
-          <ul className="space-y-1 max-h-[280px] overflow-auto text-xs">
-            {feed.map((e) => (
-              <li key={e.seq} className="flex items-baseline gap-2">
-                <span className="text-muted mono shrink-0">{fmtTime(e.at)}</span>
-                <EventLabel kind={e.kind} />
-                <span className="text-muted truncate">{describe(e)}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
     </div>
   );
 }
-
-type FeedItem = FarmEvent & { at: number; seq: number };
 
 function rateColor(rate: number): string {
   if (rate >= 80) return "text-emerald-400";
   if (rate >= 50) return "text-yellow-300";
   return "text-red-400";
-}
-
-function fmtTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour12: false });
-}
-
-const EVENT_STYLE: Record<string, string> = {
-  submit: "bg-emerald-800 text-emerald-100",
-  flags: "bg-blue-800 text-blue-100",
-  run: "bg-sky-900 text-sky-100",
-  exploit: "bg-indigo-800 text-indigo-100",
-  requeue: "bg-yellow-800 text-yellow-100",
-  expired: "bg-gray-700 text-gray-200",
-  submitter_error: "bg-pink-800 text-pink-100",
-};
-
-function EventLabel({ kind }: { kind: string }) {
-  const cls = EVENT_STYLE[kind] || "bg-gray-700 text-gray-200";
-  return <span className={"px-1.5 py-0.5 rounded mono shrink-0 " + cls}>{kind}</span>;
-}
-
-function describe(e: FarmEvent): string {
-  const p = e.payload || {};
-  switch (e.kind) {
-    case "submit":
-      return `+${p.accepted} accepted, ${p.rejected} rejected, ${p.retry} retry via ${p.protocol}`;
-    case "flags":
-      return `${p.new} new` + (p.duplicate ? `, ${p.duplicate} dup` : "") + (p.manual ? " (manual)" : "");
-    case "run":
-      return `${p.sploit} → ${p.team ?? p.target_ip ?? "?"}: ${p.flags_found} flags (exit ${p.exit_code})`;
-    case "exploit":
-      return `${p.name}` + (p.host ? ` @ ${p.host}` : "") +
-        (p.enabled !== undefined ? ` → ${p.enabled ? "on" : "off"}` : "");
-    case "requeue":
-      return `${p.flags} flag(s) requeued from ${p.from}`;
-    case "expired":
-      return `${p.flags} flag(s) expired`;
-    case "submitter_error":
-      return `jury gave no verdict for ${p.flags} flag(s): ${p.error ?? "?"}`;
-    default:
-      return JSON.stringify(p);
-  }
-}
-
-function LiveDot({ state }: { state: "open" | "closed" | "error" }) {
-  const map = { open: "bg-emerald-400", closed: "bg-gray-500", error: "bg-red-400" };
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-muted">
-      <span className={"w-2 h-2 rounded-full " + map[state]} />
-      {state === "open" ? "live" : state}
-    </span>
-  );
 }
 
 function Big({ title, value, color, hint }: {

@@ -29,6 +29,14 @@ export function Flags({ profile }: { profile: Profile }) {
   const searchQuery = useDebounced(search.trim(), 300);
   const needle = searchQuery.toLowerCase();
   const [notice, setNotice] = useState<string | null>(null);
+  // Flag ids whose (possibly long) jury response is expanded in full.
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const toggleResponse = (id: number) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
 
   const flags = useQuery({
     queryKey: ["flags", profile.url, status, searchQuery],
@@ -140,8 +148,21 @@ export function Flags({ profile }: { profile: Profile }) {
                     <td className="py-1 mono text-xs text-muted">
                       {new Date(f.captured_at).toLocaleTimeString()}
                     </td>
-                    <td className="py-1 text-xs text-muted truncate max-w-[300px]">
-                      {highlight(f.response, needle)}
+                    <td className="py-1 text-xs text-muted max-w-[320px]">
+                      {f.response ? (
+                        <button
+                          onClick={() => toggleResponse(f.id)}
+                          title={expanded.has(f.id) ? "click to collapse" : f.response}
+                          className={
+                            "text-left w-full cursor-pointer hover:text-white " +
+                            (expanded.has(f.id) ? "whitespace-pre-wrap break-all" : "truncate")
+                          }
+                        >
+                          {highlight(f.response, needle)}
+                        </button>
+                      ) : (
+                        <span className="text-muted">-</span>
+                      )}
                     </td>
                     <td className="py-1 text-right whitespace-nowrap">
                       <button
