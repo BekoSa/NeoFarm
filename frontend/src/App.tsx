@@ -6,12 +6,13 @@ import { Metrics } from "./pages/Metrics";
 import { Feed } from "./pages/Feed";
 import { Flags } from "./pages/Flags";
 import { Exploits } from "./pages/Exploits";
+import { Nodes } from "./pages/Nodes";
 import { Config } from "./pages/Config";
 import { Manual } from "./pages/Manual";
 import { LiveBadge } from "./components/LiveBadge";
 import { InstallModal } from "./components/InstallModal";
 
-type Tab = "dashboard" | "metrics" | "feed" | "flags" | "exploits" | "manual" | "config";
+type Tab = "dashboard" | "metrics" | "feed" | "flags" | "exploits" | "nodes" | "manual" | "config";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
@@ -19,6 +20,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "feed", label: "Live feed" },
   { id: "flags", label: "Flags" },
   { id: "exploits", label: "Exploits" },
+  { id: "nodes", label: "Nodes" },
   { id: "manual", label: "Manual submit" },
   { id: "config", label: "Config" },
 ];
@@ -38,6 +40,7 @@ export default function App() {
       {tab === "feed" && <Feed profile={profile} />}
       {tab === "flags" && <Flags profile={profile} />}
       {tab === "exploits" && <Exploits profile={profile} />}
+      {tab === "nodes" && <Nodes profile={profile} />}
       {tab === "manual" && <Manual profile={profile} />}
       {tab === "config" && <Config profile={profile} />}
     </Shell>

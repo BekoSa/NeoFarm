@@ -10,12 +10,17 @@ User-facing entrypoints:
                                            Works on any machine that can
                                            reach the farm.
 * ``farm-cli send 'TEXT'``               — manual flag submission.
+* ``farm-cli node``                      — run this machine as a farm-managed
+                                           node: register, then run whatever
+                                           exploits the operator assigns from
+                                           the UI, each in its own round loop.
 * ``farm-cli watch``                     — tails the live event feed.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -34,6 +39,7 @@ from rich.table import Table
 
 from . import profile as profile_mod
 from .api import FarmClient
+from .node import NodeSupervisor
 from .runner import build_command, fan_out, parse_extra_args
 
 console = Console()
@@ -334,6 +340,53 @@ async def run(
                 await asyncio.wait_for(stop.wait(), timeout=sleep_for)
             except asyncio.TimeoutError:
                 pass
+
+
+@cli.command("node")
+@click.option(
+    "--name", "-n", default=None,
+    help="Friendly node name shown in the UI (defaults to the hostname).",
+)
+@click.option(
+    "--workdir", type=click.Path(path_type=Path), default=None,
+    help="Where to write the exploit scripts the farm pushes "
+    "(default: ~/.cache/farm-cli/node).",
+)
+@click.option(
+    "--interval", type=float, default=5.0, help="Heartbeat interval (s)."
+)
+@_async
+async def node(name: str | None, workdir: Path | None, interval: float) -> None:
+    """Run this machine as a farm-managed node.
+
+    Registers with the farm and keeps running whatever exploit tasks the
+    operator assigns to this node from the UI, one round loop each — the same
+    way `farm-cli run` works, but driven centrally. Leave it running; Ctrl-C
+    stops every task and exits.
+    """
+    p = profile_mod.load()
+    name = name or socket.gethostname()
+    workdir = workdir or (Path.home() / ".cache" / "farm-cli" / "node")
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+
+    async with FarmClient(p, timeout=20.0) as client:
+        try:
+            await client.health()
+        except httpx.HTTPError as exc:
+            console.print(f"[red]cannot reach the farm: {exc}[/red]")
+            sys.exit(1)
+        supervisor = NodeSupervisor(client, name=name, workdir=workdir, interval=interval)
+        runner = asyncio.create_task(supervisor.run())
+        console.print(f"[green]node up[/green] as [cyan]{name}[/cyan] — Ctrl-C to stop")
+        await stop.wait()
+        console.print("[yellow]stopping node — tearing down tasks[/yellow]")
+        runner.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await runner
 
 
 @cli.command("watch")

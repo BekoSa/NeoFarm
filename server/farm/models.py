@@ -13,12 +13,14 @@ from datetime import datetime
 from enum import StrEnum
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -101,3 +103,80 @@ class Run(Base):
     )
 
     exploit: Mapped[Exploit | None] = relationship(back_populates="runs")
+
+
+class Node(Base):
+    """A teammate's machine running the ``farm-cli node`` agent.
+
+    The agent registers itself (stable ``node_id``), heartbeats every few
+    seconds, and in return receives the exploit tasks the operator assigned
+    to it from the UI. It then drives those exploits in round loops exactly
+    like ``farm-cli run`` — flags and run reports flow through the normal
+    pipeline — while the farm tracks each node's liveness and what it runs.
+    """
+
+    __tablename__ = "nodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Stable id generated once by the agent; survives restarts / renames.
+    node_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str | None] = mapped_column(String(128))
+    hostname: Mapped[str | None] = mapped_column(String(128))
+    ip: Mapped[str | None] = mapped_column(String(64))
+    labels: Mapped[str | None] = mapped_column(String(256))  # free-form tags
+    agent_version: Mapped[str | None] = mapped_column(String(32))
+    # Operator switch: when off, the node stops every task (break / repair).
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    # Last status word the agent reported (informational).
+    status: Mapped[str | None] = mapped_column(String(32))
+    # JSON array the agent reports: what it is currently running.
+    running: Mapped[str | None] = mapped_column(Text)
+    last_seen: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    tasks: Mapped[list["NodeTask"]] = relationship(
+        back_populates="node", cascade="all, delete-orphan"
+    )
+
+
+class NodeTask(Base):
+    """One exploit the operator pushed onto a node.
+
+    The script body travels with the task so the node is self-contained: on
+    each heartbeat the agent compares ``rev`` and only rewrites/restarts the
+    exploit when it actually changed.
+    """
+
+    __tablename__ = "node_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    node_id: Mapped[int] = mapped_column(
+        ForeignKey("nodes.id", ondelete="CASCADE"), index=True
+    )
+    sploit: Mapped[str] = mapped_column(String(128))
+    script_name: Mapped[str] = mapped_column(String(128))
+    script: Mapped[str] = mapped_column(Text)
+    args: Mapped[str | None] = mapped_column(String(512))
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
+    # Bumped whenever script/args change, so the agent knows to re-sync.
+    rev: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    node: Mapped[Node] = relationship(back_populates="tasks")
+
+    __table_args__ = (
+        UniqueConstraint("node_id", "sploit", name="uq_node_tasks_node_sploit"),
+    )

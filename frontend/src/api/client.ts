@@ -83,6 +83,39 @@ export interface RunOut {
   started_at: string;
 }
 
+export interface NodeTaskOut {
+  id: number;
+  sploit: string;
+  script_name: string;
+  script: string;
+  args: string | null;
+  enabled: boolean;
+  rev: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NodeRunning {
+  sploit: string;
+  since_s?: number;
+}
+
+export interface NodeOut {
+  id: number;
+  node_id: string;
+  name: string | null;
+  hostname: string | null;
+  ip: string | null;
+  labels: string | null;
+  agent_version: string | null;
+  enabled: boolean;
+  status: string | null;
+  running: NodeRunning[];
+  task_count: number;
+  last_seen: string | null;
+  created_at: string;
+}
+
 export interface StatsBucket {
   label: string;
   accepted: number;

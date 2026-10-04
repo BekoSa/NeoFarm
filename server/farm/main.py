@@ -14,6 +14,7 @@ from .api import config as config_api
 from .api import exploits as exploits_api
 from .api import flags as flags_api
 from .api import install as install_api
+from .api import nodes as nodes_api
 from .api import stats as stats_api
 from .api import teams as teams_api
 from .api import ws as ws_api
@@ -66,6 +67,7 @@ app.include_router(flags_api.router)
 app.include_router(exploits_api.router)
 app.include_router(teams_api.router)
 app.include_router(stats_api.router)
+app.include_router(nodes_api.router)
 app.include_router(config_api.router)
 app.include_router(install_api.router)
 app.include_router(ws_api.router)

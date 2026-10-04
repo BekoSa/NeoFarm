@@ -92,6 +92,12 @@ class FarmClient:
         r.raise_for_status()
         return r.json()
 
+    async def node_heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Register / refresh this node and fetch its assigned tasks."""
+        r = await self._client.post("/api/nodes/heartbeat", json=payload)
+        r.raise_for_status()
+        return r.json()
+
     async def submit_manual(
         self, text: str, *, sploit: str | None = "manual", team: str | None = None
     ) -> dict[str, Any]:

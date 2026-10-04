@@ -6,7 +6,7 @@ export type FeedItem = FarmEvent & { at: number; seq: number };
 export type LiveState = "open" | "closed" | "error";
 
 export const EVENT_KINDS = [
-  "submit", "flags", "run", "exploit", "requeue", "expired", "submitter_error", "pause",
+  "submit", "flags", "run", "exploit", "node", "requeue", "expired", "submitter_error", "pause",
 ] as const;
 
 /** Subscribe to the live event stream, keeping the most recent `cap` events. */
@@ -33,6 +33,7 @@ const EVENT_STYLE: Record<string, string> = {
   flags: "bg-blue-800 text-blue-100",
   run: "bg-sky-900 text-sky-100",
   exploit: "bg-indigo-800 text-indigo-100",
+  node: "bg-teal-800 text-teal-100",
   requeue: "bg-yellow-800 text-yellow-100",
   expired: "bg-gray-700 text-gray-200",
   submitter_error: "bg-pink-800 text-pink-100",
@@ -56,6 +57,12 @@ export function describe(e: FarmEvent): string {
     case "exploit":
       return `${p.name}` + (p.host ? ` @ ${p.host}` : "") +
         (p.enabled !== undefined ? ` → ${p.enabled ? "on" : "off"}` : "");
+    case "node": {
+      const who = p.name ?? p.hostname ?? "node";
+      if (p.action === "task") return `${who}: task ${p.sploit} pushed`;
+      if (p.action === "updated") return `${who} ${p.enabled ? "enabled" : "disabled"}`;
+      return `${who} ${p.action ?? "event"}`;
+    }
     case "requeue":
       return `${p.flags} flag(s) requeued from ${p.from}`;
     case "expired":

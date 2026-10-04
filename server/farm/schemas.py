@@ -122,6 +122,84 @@ class TeamOut(BaseModel):
     ip: str
 
 
+class NodeTaskOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    sploit: str
+    script_name: str
+    script: str
+    args: str | None
+    enabled: bool
+    rev: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class NodeTaskCreate(BaseModel):
+    sploit: str = Field(..., min_length=1, max_length=128)
+    script: str = Field(..., description="The exploit source the node writes and runs.")
+    script_name: str | None = Field(
+        None, description="Filename to write (defaults to <sploit>.py)."
+    )
+    args: str | None = None
+    enabled: bool = True
+
+
+class NodeTaskUpdate(BaseModel):
+    script: str | None = None
+    script_name: str | None = None
+    args: str | None = None
+    enabled: bool | None = None
+
+
+class NodeHeartbeat(BaseModel):
+    """Agent -> farm, every few seconds."""
+
+    node_id: str = Field(..., min_length=1, max_length=64)
+    name: str | None = None
+    hostname: str | None = None
+    ip: str | None = None
+    labels: str | None = None
+    agent_version: str | None = None
+    status: str | None = None
+    # What the agent is running right now, e.g. [{"sploit": "...", "since": ...}].
+    running: list[dict] = Field(default_factory=list)
+
+
+class NodeHeartbeatResponse(BaseModel):
+    """Farm -> agent: the node switch, farm state, and the assigned tasks."""
+
+    enabled: bool
+    paused: bool
+    round_length: int
+    flag_format: str
+    tasks: list[NodeTaskOut]
+
+
+class NodeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    node_id: str
+    name: str | None
+    hostname: str | None
+    ip: str | None
+    labels: str | None
+    agent_version: str | None
+    enabled: bool
+    status: str | None
+    # Parsed from the stored JSON by the API layer.
+    running: list[dict] = Field(default_factory=list)
+    task_count: int = 0
+    last_seen: datetime | None
+    created_at: datetime
+
+
+class NodeUpdate(BaseModel):
+    name: str | None = None
+    labels: str | None = None
+    enabled: bool | None = None
+
+
 class StatsBucket(BaseModel):
     label: str
     accepted: int = 0
