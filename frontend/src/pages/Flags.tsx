@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlagOut, Profile, useApi } from "../api/client";
 import { Card } from "../components/Card";
 import { StatusPill } from "../components/StatusPill";
-import { SearchBar, countLabel } from "../components/SearchBar";
+import { SearchBar } from "../components/SearchBar";
+import { Pager } from "../components/Pager";
 import { highlight } from "../components/highlight";
 
 const STATUSES = ["", "QUEUED", "PENDING", "ACCEPTED", "REJECTED", "EXPIRED", "DUPLICATE", "ERROR"];
 // Statuses the bulk "requeue matching" action accepts (see POST /api/flags/requeue).
 const REQUEUEABLE = new Set(["REJECTED", "ERROR", "EXPIRED"]);
-const PAGE = 300;
+const PAGE_SIZES = [50, 100, 300, 500];
 
 function useDebounced<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -29,6 +30,10 @@ export function Flags({ profile }: { profile: Profile }) {
   const searchQuery = useDebounced(search.trim(), 300);
   const needle = searchQuery.toLowerCase();
   const [notice, setNotice] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(100);
+  // Any filter / size change starts the listing over at the first page.
+  useEffect(() => setPage(0), [status, searchQuery, pageSize]);
   // Flag ids whose (possibly long) jury response is expanded in full.
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const toggleResponse = (id: number) =>
@@ -39,9 +44,12 @@ export function Flags({ profile }: { profile: Profile }) {
     });
 
   const flags = useQuery({
-    queryKey: ["flags", profile.url, status, searchQuery],
+    queryKey: ["flags", profile.url, status, searchQuery, page, pageSize],
     queryFn: async () => {
-      const params: Record<string, string> = { limit: String(PAGE) };
+      const params: Record<string, string> = {
+        limit: String(pageSize),
+        offset: String(page * pageSize),
+      };
       if (status) params.status = status;
       if (searchQuery) params.q = searchQuery;
       const res = await api.get<FlagOut[]>("/api/flags", { params });
@@ -49,7 +57,17 @@ export function Flags({ profile }: { profile: Profile }) {
       return { rows: res.data, total };
     },
     refetchInterval: 5_000,
+    // Keep the current page visible while the next one loads (no flicker).
+    placeholderData: keepPreviousData,
   });
+
+  // If the match count shrank past the current page (expiries, a new filter),
+  // fall back to a page that still has rows.
+  useEffect(() => {
+    if (flags.data && page > 0 && flags.data.rows.length === 0) setPage(0);
+  }, [flags.data, page]);
+
+  const total = flags.data?.total ?? 0;
 
   const requeueMatching = useMutation({
     mutationFn: async () =>
@@ -92,11 +110,6 @@ export function Flags({ profile }: { profile: Profile }) {
           right={
             <div className="flex gap-2 text-xs items-center">
               {notice && <span className="text-emerald-400">{notice}</span>}
-              {flags.data && (
-                <span className="text-muted mono">
-                  {countLabel(flags.data.rows.length, flags.data.total, flags.data.rows.length < flags.data.total)}
-                </span>
-              )}
               {REQUEUEABLE.has(status) && (
                 <button
                   onClick={() => {
@@ -189,6 +202,20 @@ export function Flags({ profile }: { profile: Profile }) {
                 )}
               </tbody>
             </table>
+          </div>
+          <div className="flex items-center justify-between pt-3 border-t border-border mt-1">
+            <span className="text-xs text-muted">
+              {flags.isFetching ? "refreshing…" : `page size ${pageSize}`}
+            </span>
+            <Pager
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              onPage={setPage}
+              onPageSize={setPageSize}
+              sizes={PAGE_SIZES}
+              unit="flags"
+            />
           </div>
         </Card>
       </div>
