@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { buildApi, clearProfile, defaultUrl, FarmConfig, loadProfile, Profile, saveProfile, useApi } from "./api/client";
 import { Dashboard } from "./pages/Dashboard";
+import { Metrics } from "./pages/Metrics";
 import { Feed } from "./pages/Feed";
 import { Flags } from "./pages/Flags";
 import { Exploits } from "./pages/Exploits";
@@ -10,10 +11,11 @@ import { Manual } from "./pages/Manual";
 import { LiveBadge } from "./components/LiveBadge";
 import { InstallModal } from "./components/InstallModal";
 
-type Tab = "dashboard" | "feed" | "flags" | "exploits" | "manual" | "config";
+type Tab = "dashboard" | "metrics" | "feed" | "flags" | "exploits" | "manual" | "config";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Dashboard" },
+  { id: "metrics", label: "Metrics" },
   { id: "feed", label: "Live feed" },
   { id: "flags", label: "Flags" },
   { id: "exploits", label: "Exploits" },
@@ -32,6 +34,7 @@ export default function App() {
   return (
     <Shell profile={profile} onLogout={() => { clearProfile(); setProfile(null); }} tab={tab} setTab={setTab}>
       {tab === "dashboard" && <Dashboard profile={profile} />}
+      {tab === "metrics" && <Metrics profile={profile} />}
       {tab === "feed" && <Feed profile={profile} />}
       {tab === "flags" && <Flags profile={profile} />}
       {tab === "exploits" && <Exploits profile={profile} />}

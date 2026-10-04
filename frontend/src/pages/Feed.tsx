@@ -15,6 +15,18 @@ export function Feed({ profile }: { profile: Profile }) {
     [feed, kinds],
   );
 
+  // Dedup metric: sum new vs duplicate across the flags events in view.
+  const tally = useMemo(() => {
+    let neu = 0, dup = 0;
+    for (const e of feed) {
+      if (e.kind === "flags") {
+        neu += Number(e.payload?.new ?? 0);
+        dup += Number(e.payload?.duplicate ?? 0);
+      }
+    }
+    return { neu, dup };
+  }, [feed]);
+
   const toggle = (k: string) =>
     setKinds((prev) => {
       const next = new Set(prev);
@@ -27,7 +39,12 @@ export function Feed({ profile }: { profile: Profile }) {
       title="Live feed"
       right={
         <div className="flex items-center gap-3 text-xs">
-          <span className="text-muted mono">{shown.length}</span>
+          <span className="text-muted">
+            <span className="text-blue-300 mono">{tally.neu}</span> new
+            {" · "}
+            <span className="text-purple-300 mono">{tally.dup}</span> dedup
+          </span>
+          <span className="text-muted mono">{shown.length} ev</span>
           <button onClick={clear} className="px-2 py-1 rounded border border-border hover:bg-panel2">
             clear
           </button>
