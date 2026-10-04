@@ -101,6 +101,22 @@ def test_parse_object_keyed_by_flag() -> None:
     assert verdicts(parse_results([F1, F2, F3], body)) == [A, R, E]
 
 
+def test_parse_altayctf_real_shape_case_insensitive_is_accepted() -> None:
+    # The jury keys by flag with an upper-cased ALT_ prefix and an
+    # `is_accepted` boolean; we submit the flag lower-cased.
+    body = json.dumps({
+        F1.upper(): {"is_accepted": True, "msg": "Accepted"},
+        F2.upper(): {"is_accepted": False, "msg": "Invalid Signature"},
+    })
+    # F3 isn't in the reply: retry it, don't guess.
+    assert verdicts(parse_results([F1, F2, F3], body)) == [A, R, E]
+
+
+def test_parse_single_flag_keyed_object_not_read_as_whole_reply() -> None:
+    body = json.dumps({F1.upper(): {"is_accepted": False, "msg": "Flag is too old"}})
+    assert verdicts(parse_results([F1], body)) == [R]
+
+
 def test_parse_single_reply_only_for_single_flag() -> None:
     assert verdicts(parse_results([F1], "Accepted")) == [A]
     assert verdicts(parse_results([F1, F2], "Accepted")) == [E, E]  # never mass-accept

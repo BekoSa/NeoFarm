@@ -34,8 +34,11 @@ _ACCEPT_WORDS = frozenset({
     "accepted", "accept", "correct", "success", "successful", "ok", "okay",
     "captured", "good", "congratulations", "congrats", "true",
 })
-# Boolean fields that carry the verdict directly.
-_BOOL_KEYS = ("accepted", "success", "ok", "valid", "status", "result")
+# Boolean fields that carry the verdict directly. AltayCTF uses `is_accepted`.
+_BOOL_KEYS = (
+    "is_accepted", "is_correct", "accepted", "correct", "success",
+    "ok", "valid", "status", "result",
+)
 # Text fields that carry a human-readable verdict.
 _TEXT_KEYS = ("status", "verdict", "result", "message", "msg", "detail", "error")
 

@@ -10,10 +10,13 @@ Flags are submitted as one JSON batch::
 
 The reply format isn't published, so the common shapes are understood:
 
+* an object keyed by flag — the real AltayCTF shape, e.g.
+  ``{"ALT_...": {"is_accepted": false, "msg": "Invalid Signature"}}``.
+  Keys are matched case-insensitively, since the jury echoes the flag
+  with an upper-cased ``ALT_`` prefix;
 * a list (bare, or under ``results``/``flags``/``data``) of per-flag items —
   objects carrying a ``flag`` field are matched by it, anything else
   only positionally and only when the list length equals the batch;
-* an object keyed by flag (``{"alt_...": "accepted", ...}``);
 * a single verdict (string or object) when the batch had one flag.
 
 A flag the reply doesn't clearly cover gets ERROR, which the submitter
@@ -104,6 +107,21 @@ def parse_results(flags: list[str], body: str) -> list[SubmissionResult]:
     return out
 
 
+def _match_by_key(flags: list[str], payload: dict[str, Any]) -> dict[str, Any]:
+    """Match an object keyed by flag, exact first then case-insensitively.
+
+    The jury returns ``{"ALT_...": {...}}`` while we submit ``alt_...``.
+    """
+    lower = {k.lower(): v for k, v in payload.items() if isinstance(k, str)}
+    out: dict[str, Any] = {}
+    for flag in flags:
+        if flag in payload:
+            out[flag] = payload[flag]
+        elif flag.lower() in lower:
+            out[flag] = lower[flag.lower()]
+    return out
+
+
 def _match(flags: list[str], payload: Any) -> dict[str, Any]:
     items: Any = payload
     if isinstance(payload, dict):
@@ -112,8 +130,10 @@ def _match(flags: list[str], payload: Any) -> dict[str, Any]:
         )
         if listed is not None:
             items = listed
-        elif any(flag in payload for flag in flags):
-            return {flag: payload[flag] for flag in flags if flag in payload}
+        else:
+            keyed = _match_by_key(flags, payload)
+            if keyed:
+                return keyed
 
     if isinstance(items, list):
         keyed: dict[str, Any] = {}
