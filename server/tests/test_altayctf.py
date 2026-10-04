@@ -38,6 +38,7 @@ def test_plugins_registered_but_helper_is_not() -> None:
         ("Flag already submitted", R),
         ("This is your own flag", R),
         ("Invalid flag format", R),
+        ("Invalid Prefix", R),          # the jury's reply to a malformed flag
         ("Hold on", E),                 # "old" inside a word is no verdict
         ("Rate limit exceeded, try again later", E),
         ("Internal server error", E),
@@ -113,7 +114,13 @@ class _Jury(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        _Jury.seen.append({"path": self.path, "body": body, "token": self.headers.get("X-Team-Token")})
+        _Jury.seen.append({
+            "path": self.path,
+            "body": body,
+            "token": self.headers.get("X-Team-Token"),
+            "type": self.headers.get("Content-Type"),
+            "accept": self.headers.get("Accept"),
+        })
         reply = [{"flag": f, "msg": "Accepted" if f == F1 else "Flag is too old"} for f in body["flags"]]
         data = json.dumps({"data": reply}).encode()
         self.send_response(_Jury.status)
@@ -138,7 +145,13 @@ def test_http_roundtrip(http_jury: str) -> None:
     proto = AltayCtfHttpProtocol(url=http_jury, headers={"X-Team-Token": "tok"})
     res = asyncio.run(proto.submit([F1, F2]))
     assert verdicts(res) == [A, R]
-    assert _Jury.seen == [{"path": "/api/v1/flags", "body": {"flags": [F1, F2]}, "token": "tok"}]
+    assert _Jury.seen == [{
+        "path": "/api/v1/flags",
+        "body": {"flags": [F1, F2]},
+        "token": "tok",
+        "type": "application/json",
+        "accept": "application/json",
+    }]
 
 
 def test_http_error_status_is_retryable(http_jury: str) -> None:
@@ -154,14 +167,27 @@ def test_http_unreachable() -> None:
 
 # ----------------------------------------------------------------- TCP e2e
 
-def tcp_jury(*, banner: bool, close_each: bool, silent_for: set[str] = frozenset()):
+# The real jury's greeting, two lines, the first with a trailing space.
+_GREETING = b"Welcome from flag service, your team: W@zz4bi. \nPlease send your flags.\n"
+
+
+def tcp_jury(
+    *,
+    banner: bool,
+    close_each: bool,
+    silent_for: set[str] = frozenset(),
+    banner_delay: float = 0.0,
+):
     """Start a fake line jury; returns (server, port, connection counter)."""
     conns = [0]
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         conns[0] += 1
         if banner:
-            writer.write(b"Welcome to AltayCTF jury!\nSend flags, one per line\n\n")
+            # A late banner outlives greeting_timeout, so the drain in
+            # _connect misses it and _exchange has to skip it by content.
+            await asyncio.sleep(banner_delay)
+            writer.write(_GREETING)
             await writer.drain()
         try:
             while line := await reader.readline():
@@ -169,8 +195,8 @@ def tcp_jury(*, banner: bool, close_each: bool, silent_for: set[str] = frozenset
                 if flag in silent_for:
                     await asyncio.sleep(10)
                     continue
-                verdict = "Accepted" if flag == F1 else "Flag is too old"
-                writer.write(f"[{flag}] {verdict}\n".encode())
+                verdict = "Accepted" if flag == F1 else "Invalid Prefix"
+                writer.write(f"{verdict}\n".encode())
                 await writer.drain()
                 if close_each:
                     break
@@ -207,6 +233,15 @@ def test_tcp_server_closing_after_each_flag(banner: bool) -> None:
     assert conns >= len(flags)
     if not banner:
         assert took < 2  # no per-connection banner wait once we know there's none
+
+
+def test_tcp_late_banner_is_not_read_as_a_verdict() -> None:
+    # greeting_timeout is 0.3s in run_tcp; the banner only arrives after it.
+    res, _, _ = asyncio.run(
+        run_tcp([F1, F2], banner=True, close_each=False, banner_delay=0.5)
+    )
+    assert verdicts(res) == [A, R]
+    assert res[0].response == "Accepted"
 
 
 def test_tcp_silent_reply_is_error_and_rest_continues() -> None:

@@ -6,11 +6,17 @@ request/response (send a flag, read its reply), which works the same
 whether the server keeps the connection open or closes it after every
 flag — in the latter case we simply reconnect for the next one.
 
-Whatever the server says right after connecting (a banner such as
-"Welcome, send your flags") is drained and discarded, so it is never
-mistaken for the first flag's verdict. The first connection waits up to
-``greeting_timeout`` for it; if no banner came, later reconnects in the
-same batch don't wait at all.
+Whatever the server says right after connecting is drained and discarded,
+so it is never mistaken for the first flag's verdict. The live jury greets
+with two lines::
+
+    Welcome from flag service, your team: <name>.
+    Please send your flags.
+
+The first connection waits up to ``greeting_timeout`` for that; if no
+banner came, later reconnects in the same batch don't wait at all. As a
+safety net against a banner slower than ``greeting_timeout``, a reply line
+that reads as a greeting is skipped rather than classified.
 
 Failure handling, so a dead jury can't stall the submitter for minutes:
 
@@ -33,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 
 from ._altayctf import classify_text
 from .base import BaseProtocol, FlagVerdict, SubmissionResult
@@ -40,6 +47,16 @@ from .base import BaseProtocol, FlagVerdict, SubmissionResult
 
 # After a banner line, keep draining until the server is quiet this long.
 _BANNER_IDLE = 0.1
+
+# Greeting lines the jury prints on connect, seen as:
+#
+#     Welcome from flag service, your team: <name>.
+#     Please send your flags.
+#
+# The timed drain in _connect normally eats them, but it can miss one on a
+# slow link, or on a reconnect after the first connect saw no banner. Such a
+# line is never a verdict, so _exchange skips it by content as well.
+_GREETING = re.compile(r"welcome|please\s+send|your\s+(?:team|flags)", re.I)
 
 
 class _Disconnected(Exception):
@@ -150,8 +167,9 @@ class AltayCtfTcpProtocol(BaseProtocol):
                 if not line:
                     raise _Disconnected("closed by server")
                 reply = line.decode("utf-8", errors="replace").strip()
-                if reply:  # skip blank separator lines
-                    return reply
+                if not reply or _GREETING.search(reply):
+                    continue  # blank separator or a leaked greeting line
+                return reply
         except (ConnectionResetError, BrokenPipeError) as exc:
             raise _Disconnected(repr(exc)) from exc
 

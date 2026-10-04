@@ -3,7 +3,10 @@
 Flags are submitted as one JSON batch::
 
     POST http://10.80.80.10/api/v1/flags
-    {"flags": ["alt_...", ...]}
+    Content-Type: application/json
+    Accept: application/json
+
+    {"flags": ["alt_eDc3c5bdbdbb5dab6382a150b8", ...]}
 
 The reply format isn't published, so the common shapes are understood:
 
@@ -51,7 +54,10 @@ class AltayCtfHttpProtocol(BaseProtocol):
         url = url.rstrip("/")
         self._url = url if url.endswith("/api/v1/flags") else url + "/api/v1/flags"
         self._timeout = float(kwargs.get("timeout", 5.0))
-        self._headers = {str(k): str(v) for k, v in (kwargs.get("headers") or {}).items()}
+        self._headers = {"Accept": "application/json"}
+        self._headers.update(
+            {str(k): str(v) for k, v in (kwargs.get("headers") or {}).items()}
+        )
 
     async def submit(self, flags: list[str]) -> list[SubmissionResult]:
         if not flags:

@@ -7,7 +7,7 @@
 
 # Regex used to extract flags from exploit stdout.
 # CHECK: the real AltayCTF flag alphabet/length (the jury flags start "alt_").
-flag_format: "alt_[A-Za-z0-9_+/=-]{8,128}"
+flag_format: '[aA][lL][tT]_[A-Za-z0-9]{26}'
 
 # Flag time-to-live, seconds. Older unsubmitted flags become EXPIRED.
 flag_lifetime: 240              # CHECK: from the rules
@@ -47,13 +47,12 @@ submitter:
 # Teams. Explicit `{alias, ip}` entries and/or ranges where {i} is the team
 # number ({i:02d} zero-pads). Later entries win on alias clash.
 teams:
-  - from: 1                     # CHECK: number of teams
+  - from: 1
     to: 22
-    alias: "team-{i:02d}"
-    ip: "10.10.{i}.3"           # CHECK: AltayCTF vulnbox addressing
-
-# Never attacked — put our own team (and the NOP team) here, by alias or IP.
-exclude_teams: []               # CHECK: e.g. ["team-10"]
+    alias: team-{i:02d}
+    ip: 10.40.{i}.10
+exclude_teams:                  # CHECK: e.g. ["team-10"]
 
 # Exploit run reports older than this many seconds are purged (0 = keep).
+  - team-10
 runs_retention: 7200
