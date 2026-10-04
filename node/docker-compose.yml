@@ -1,0 +1,35 @@
+name: neofarm-node
+
+# A teammate runs the exploit node in one command — no native Python needed:
+#
+#   FARM_URL=http://<farm-host>:5000 FARM_TOKEN=<token> \
+#     docker compose -f node/docker-compose.yml up -d
+#
+# The node then shows up under the farm's "Nodes" tab, where you push exploits
+# to it. See node/README.md for details.
+
+services:
+  node:
+    image: ${FARM_IMAGE_REPO:-ghcr.io/bekosa/neofarm}-node:${FARM_TAG:-latest}
+    # Build locally instead of pulling with:  docker compose ... up -d --build
+    build:
+      context: ..
+      dockerfile: node/Dockerfile
+    restart: unless-stopped
+    # Host networking so the node reaches the game network exactly like the
+    # host does. On Docker Desktop (mac/Windows) drop this — bridge NAT still
+    # reaches external target IPs.
+    network_mode: host
+    environment:
+      FARM_URL: ${FARM_URL:?set FARM_URL to the farm, e.g. http://10.x.x.x:5000}
+      FARM_TOKEN: ${FARM_TOKEN:?set FARM_TOKEN (same X-Farm-Token as the UI)}
+      # Shown in the UI; defaults to the container hostname if unset.
+      NODE_NAME: ${NODE_NAME:-}
+      # Optional extra exploit deps installed at startup, e.g. "pwntools".
+      PIP_PACKAGES: ${PIP_PACKAGES:-}
+    volumes:
+      # Persists the node identity so a restart is the SAME node, not a new one.
+      - node-state:/root/.config/farm-cli
+
+volumes:
+  node-state:

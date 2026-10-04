@@ -58,6 +58,9 @@ jobs:
           - name: frontend
             context: frontend
             dockerfile: frontend/Dockerfile
+          - name: node
+            context: .
+            dockerfile: node/Dockerfile
     steps:
       - uses: actions/checkout@v4
       - name: Image name
