@@ -40,6 +40,9 @@ Config (all optional, shown with defaults)::
         body_prefix: ""       # require the body to start with this (e.g. "6") —
                               # see the warning above before enabling
         body_suffix: ""       # require the body to end with this (e.g. "a")
+        body_template: ""     # positional mask, '.' = any char, else exact —
+                              # e.g. "6.c.....0.0.0....0.......a" (strongest:
+                              # the full observed skeleton; off by default)
 """
 
 from __future__ import annotations
@@ -75,6 +78,14 @@ class AltayCtfValidator(BaseValidator):
         # for the risk of enabling it mid-game.
         self._body_prefix = str(kwargs.get("body_prefix", ""))
         self._body_suffix = str(kwargs.get("body_suffix", ""))
+        # Positional mask over the whole body: '.' matches any char, every
+        # other char must match exactly. Captures the full fixed skeleton
+        # observed in accepted flags, e.g. "6.c.....0.0.0....0.......a".
+        # Off by default ("") — same inference caveat as the markers above,
+        # though the constant nibbles look like a static format template
+        # (the low nibble of the first byte is itself random, so "6" is a
+        # marker, not a rolling counter).
+        self._body_template = str(kwargs.get("body_template", ""))
 
     def validate(self, flag: str) -> ValidationResult:
         for bad in self._blacklist:
@@ -106,5 +117,17 @@ class AltayCtfValidator(BaseValidator):
 
         if self._body_suffix and not body.endswith(self._body_suffix):
             return ValidationResult.reject(f"body does not end with {self._body_suffix!r}")
+
+        if self._body_template:
+            tpl = self._body_template
+            if len(body) != len(tpl):
+                return ValidationResult.reject(
+                    f"body length {len(body)} != template length {len(tpl)}"
+                )
+            for i, (want, got) in enumerate(zip(tpl, body)):
+                if want != "." and want != got:
+                    return ValidationResult.reject(
+                        f"body[{i}]={got!r} != template {want!r}"
+                    )
 
         return ValidationResult.accept()

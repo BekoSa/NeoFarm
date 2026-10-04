@@ -74,6 +74,23 @@ def test_altayctf_body_markers_when_enabled() -> None:
     assert not v.validate("ALT_69cdd49a050c053c703d55b19f").ok  # wrong last nibble
 
 
+def test_altayctf_body_template_off_by_default() -> None:
+    # A valid 26-hex body that violates the skeleton still passes by default
+    # (same body as SAMPLE but starting '7', so pos0 breaks the template).
+    v = build_validator("altayctf")
+    assert v.validate("ALT_7" + SAMPLE.split("_", 1)[1][1:]).ok
+
+
+def test_altayctf_body_template_when_enabled() -> None:
+    tpl = "6.c.....0.0.0....0.......a"
+    v = build_validator("altayctf", body_template=tpl)
+    assert v.validate(SAMPLE).ok                               # matches skeleton
+    assert not v.validate("ALT_" + "0" * 26).ok                # breaks pos0/pos2…
+    # Flip one constant position (pos2 'c' -> 'd'), rest of SAMPLE intact.
+    broken = "6" + "9" + "d" + SAMPLE.split("_", 1)[1][3:]
+    assert not v.validate("ALT_" + broken).ok
+
+
 def test_altayctf_length_check_can_be_disabled() -> None:
     v = build_validator("altayctf", body_len=None)
     assert v.validate("ALT_a").ok and v.validate("ALT_" + "abcdef0123" * 20).ok
