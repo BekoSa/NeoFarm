@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -21,6 +22,7 @@ from ..deps import require_token
 from ..ws import hub
 
 router = APIRouter(prefix="/api/flags", tags=["flags"])
+log = logging.getLogger("farm.flags")
 
 _INGEST_RETRIES = 5
 _INGEST_CHUNK_SIZE = 1000
@@ -110,9 +112,11 @@ async def submit_flags(
     will regex against the configured `flag_format`.
     """
     cfg = get_config()
+    validator = _flag_validator(cfg)
     alias_by_ip = {t.ip: t.alias for t in cfg.expanded_teams()}
     candidates: list[dict[str, str | None]] = []
     invalid = 0
+    rejected_sample: str | None = None
 
     for item in payload.items:
         team = item.team or alias_by_ip.get(item.target_ip or "")
@@ -130,6 +134,13 @@ async def submit_flags(
                 # Would fail the whole insert — and every flag sent with it.
                 invalid += 1
                 continue
+            verdict = validator.validate(f)
+            if not verdict.ok:
+                # Dropped locally — never queued, never sent to the jury.
+                invalid += 1
+                if rejected_sample is None:
+                    rejected_sample = verdict.reason
+                continue
             candidates.append(
                 {
                     "flag": f,
@@ -143,6 +154,11 @@ async def submit_flags(
     new, dup = await _ingest_flags(sess, candidates)
     await sess.commit()
 
+    if invalid and rejected_sample:
+        log.info(
+            "validator '%s' dropped %d flag(s) before the queue (e.g. %s)",
+            cfg.flag_validator, invalid, rejected_sample,
+        )
     if new:
         await hub.publish(
             "flags",
@@ -167,25 +183,43 @@ async def submit_manual(
 ) -> schemas.FlagSubmitResponse:
     """Manual input from the UI: paste arbitrary text, get flags out."""
     cfg = get_config()
+    validator = _flag_validator(cfg)
     flags = extract_flags(payload.text, cfg.flag_format)
-    candidates = [
-        {
-            "flag": f,
-            "status": models.FlagStatus.QUEUED.value,
-            "sploit": _clip(payload.sploit or "manual", 128),
-            "team": _clip(payload.team, 64),
-        }
-        for f in flags
-        if len(f) <= _FLAG_MAX_LEN
-    ]
+    candidates = []
+    invalid = 0
+    for f in flags:
+        if len(f) > _FLAG_MAX_LEN or not validator.validate(f).ok:
+            invalid += 1
+            continue
+        candidates.append(
+            {
+                "flag": f,
+                "status": models.FlagStatus.QUEUED.value,
+                "sploit": _clip(payload.sploit or "manual", 128),
+                "team": _clip(payload.team, 64),
+            }
+        )
     new, dup = await _ingest_flags(sess, candidates)
     await sess.commit()
     if new:
         await hub.publish("flags", {"new": new, "duplicate": dup, "manual": True})
-    return schemas.FlagSubmitResponse(new=new, duplicate=dup, invalid=0)
+    return schemas.FlagSubmitResponse(new=new, duplicate=dup, invalid=invalid)
 
 
 _LIKE_ESCAPE = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
+
+
+def _flag_validator(cfg):
+    """Build the configured local validator; fall back to passthrough so a
+    bad `flag_validator` id can never silently drop every flag."""
+    from ..validators import build_validator
+
+    name = cfg.flag_validator
+    try:
+        return build_validator(name, **cfg.validators.get(name, {}))
+    except Exception as exc:
+        log.warning("flag_validator %r unusable (%s); accepting all flags", name, exc)
+        return build_validator("passthrough")
 
 # Columns the free-text search (`q`) scans — flag body, exploit, team, IP
 # and jury response — all case-insensitive substring matches.

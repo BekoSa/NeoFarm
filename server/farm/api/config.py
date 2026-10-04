@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from ..config import FarmConfig, get_config, replace_config
 from ..deps import require_token
 from ..protocols import available_protocols
+from ..validators import available_validators
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -28,6 +29,12 @@ async def write_config(payload: dict) -> dict:
             f"unknown protocol '{cfg.protocol}'; "
             f"available: {sorted(available_protocols())}",
         )
+    if cfg.flag_validator not in available_validators():
+        raise HTTPException(
+            400,
+            f"unknown flag_validator '{cfg.flag_validator}'; "
+            f"available: {sorted(available_validators())}",
+        )
     new = replace_config(cfg, persist=True)
     return new.model_dump(mode="json", by_alias=True)
 
@@ -35,3 +42,8 @@ async def write_config(payload: dict) -> dict:
 @router.get("/protocols", dependencies=[Depends(require_token)])
 async def list_protocols() -> list[str]:
     return sorted(available_protocols())
+
+
+@router.get("/validators", dependencies=[Depends(require_token)])
+async def list_validators() -> list[str]:
+    return sorted(available_validators())

@@ -127,6 +127,10 @@ class FarmConfig(BaseModel):
     round_length: int = Field(60, ge=1)
     protocol: str = "dummy"
     protocols: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # Local pre-queue flag check (a plugin under farm/validators/). The
+    # default accepts every well-formed flag, keeping behaviour unchanged.
+    flag_validator: str = "passthrough"
+    validators: dict[str, dict[str, Any]] = Field(default_factory=dict)
     submitter: SubmitterConfig = Field(default_factory=SubmitterConfig)
     teams: list[TeamRange | TeamConfig] = Field(default_factory=list)
     # Aliases or IPs that are never attacked: our own team, the NOP team.

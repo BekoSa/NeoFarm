@@ -121,6 +121,8 @@ export interface FarmConfig {
   round_length: number;
   protocol: string;
   protocols: Record<string, Record<string, unknown>>;
+  flag_validator: string;
+  validators: Record<string, Record<string, unknown>>;
   submitter: { period: number; idle_period: number; batch_size: number };
   // Mixed list: explicit {alias, ip} entries and/or {from, to, alias?, ip?}
   // ranges. Use /api/teams if you want the flat list of attack targets.
