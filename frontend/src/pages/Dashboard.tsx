@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ExploitOut, Profile, StatsBucket, StatsOut, TeamOut, useApi } from "../api/client";
 import { Card } from "../components/Card";
+import { C, Donut } from "../components/charts";
+import { IssTracker } from "../components/IssTracker";
 import { SortHeader, useSort } from "../components/sortable";
 
 export function Dashboard({ profile }: { profile: Profile }) {
@@ -47,13 +49,16 @@ export function Dashboard({ profile }: { profile: Profile }) {
         <Big title="Error" value={t.error} color="text-pink-300" />
       </div>
 
-      <div className="col-span-12 md:col-span-8">
-        <Card title="Flag breakdown">
-          <StatusBar b={t} total={total} />
+      <div className="col-span-12 md:col-span-5">
+        <Card title="Flag breakdown" className="h-full">
+          <FlagDonut b={t} total={total} />
         </Card>
       </div>
-      <div className="col-span-12 md:col-span-4">
-        <Card title="Fleet">
+      <div className="col-span-12 sm:col-span-6 md:col-span-4">
+        <IssTracker />
+      </div>
+      <div className="col-span-12 sm:col-span-6 md:col-span-3">
+        <Card title="Fleet" className="h-full">
           <div className="space-y-3">
             <Line label="Exploits" value={`${enabled} on / ${exploits.data?.length ?? 0}`} />
             <Line label="Target teams" value={String(teams.data?.length ?? 0)} />
@@ -116,37 +121,46 @@ function Line({ label, value, cls }: { label: string; value: string; cls?: strin
   );
 }
 
-const SEGMENTS: { key: keyof StatsBucket; cls: string; label: string }[] = [
-  { key: "accepted", cls: "bg-emerald-500", label: "accepted" },
-  { key: "queued", cls: "bg-yellow-400", label: "queued" },
-  { key: "rejected", cls: "bg-red-500", label: "rejected" },
-  { key: "error", cls: "bg-pink-500", label: "error" },
-  { key: "expired", cls: "bg-gray-500", label: "expired" },
+// Fixed status order; expired (grey) sits between rejected (red) and error
+// (pink) so the two warm hues are never adjacent arcs. Colours match the rest
+// of the UI and carry a labelled, valued legend — never colour alone.
+const STATUS_SEGMENTS: { key: keyof StatsBucket; label: string; color: string }[] = [
+  { key: "accepted", label: "accepted", color: C.accepted },
+  { key: "queued", label: "queued", color: C.queued },
+  { key: "rejected", label: "rejected", color: C.rejected },
+  { key: "expired", label: "expired", color: C.expired },
+  { key: "error", label: "error", color: C.error },
 ];
 
-function StatusBar({ b, total }: { b: StatsBucket; total: number }) {
+function FlagDonut({ b, total }: { b: StatsBucket; total: number }) {
+  const [active, setActive] = useState<string | null>(null);
   if (total === 0) {
     return <div className="text-muted text-sm">no flags yet</div>;
   }
+  const segs = STATUS_SEGMENTS.map((s) => ({
+    label: s.label, value: b[s.key] as number, color: s.color,
+  }));
   return (
-    <div className="space-y-3">
-      <div className="flex h-3 rounded-full overflow-hidden bg-panel2">
-        {SEGMENTS.map((seg) => {
-          const v = b[seg.key] as number;
-          if (!v) return null;
+    <div className="flex items-center gap-5 h-full">
+      <Donut segments={segs} total={total} active={active} onActive={setActive} />
+      <div className="flex-1 space-y-1.5 min-w-0">
+        {segs.map((s) => {
+          const pct = Math.round((s.value / total) * 100);
+          const dim = active !== null && active !== s.label;
           return (
-            <div key={seg.key} className={seg.cls} style={{ width: `${(v / total) * 100}%` }}
-                 title={`${seg.label}: ${v}`} />
+            <div
+              key={s.label}
+              onMouseEnter={() => setActive(s.label)}
+              onMouseLeave={() => setActive(null)}
+              className={"flex items-center gap-2 text-sm transition-opacity " + (dim ? "opacity-40" : "")}
+            >
+              <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: s.color }} />
+              <span className="text-muted flex-1 truncate">{s.label}</span>
+              <span className="mono text-white">{s.value.toLocaleString()}</span>
+              <span className="mono text-muted text-xs w-9 text-right">{pct}%</span>
+            </div>
           );
         })}
-      </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        {SEGMENTS.map((seg) => (
-          <span key={seg.key} className="flex items-center gap-1.5 text-muted">
-            <span className={"w-2.5 h-2.5 rounded-sm " + seg.cls} />
-            {seg.label} <span className="mono text-white">{b[seg.key] as number}</span>
-          </span>
-        ))}
       </div>
     </div>
   );

@@ -138,3 +138,71 @@ export function BarList({
     </div>
   );
 }
+
+/** Donut for a part-to-whole (status composition). Hero total in the hole;
+ *  identity never colour-alone — the caller pairs it with a labelled+valued
+ *  legend, and arcs carry a native tooltip. `active` is controlled so hovering
+ *  a legend row and an arc highlight each other. A 2px surface gap separates
+ *  adjacent fills. */
+export function Donut({
+  segments, size = 140, thickness = 16, total, centerLabel = "Total", active, onActive,
+}: {
+  segments: { label: string; value: number; color: string }[];
+  size?: number;
+  thickness?: number;
+  total: number;
+  centerLabel?: string;
+  active?: string | null;
+  onActive?: (label: string | null) => void;
+}) {
+  const r = (size - thickness) / 2;
+  const c = size / 2;
+  const circ = 2 * Math.PI * r;
+  const gap = total > 0 ? 3 : 0;
+  const drawn = segments.filter((s) => s.value > 0);
+  let acc = 0;
+  const activeSeg = active ? segments.find((s) => s.label === active) : undefined;
+  const centerVal = activeSeg ? activeSeg.value : total;
+  const centerTxt = activeSeg ? activeSeg.label : centerLabel;
+  const pct = activeSeg && total ? Math.round((activeSeg.value / total) * 100) : null;
+
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={c} cy={c} r={r} fill="none" stroke={C.grid} strokeWidth={thickness} />
+        {drawn.map((s) => {
+          const frac = s.value / total;
+          const len = Math.max(0.5, frac * circ - gap);
+          const start = acc * 360 - 90;
+          acc += frac;
+          const isActive = active === s.label;
+          return (
+            <circle
+              key={s.label}
+              cx={c} cy={c} r={r} fill="none"
+              stroke={s.color}
+              strokeWidth={isActive ? thickness + 4 : thickness}
+              strokeDasharray={`${len} ${circ - len}`}
+              transform={`rotate(${start} ${c} ${c})`}
+              onMouseEnter={() => onActive?.(s.label)}
+              onMouseLeave={() => onActive?.(null)}
+              style={{ cursor: "pointer", transition: "stroke-width .12s" }}
+            >
+              <title>{s.label}: {s.value}{total ? ` (${Math.round(frac * 100)}%)` : ""}</title>
+            </circle>
+          );
+        })}
+      </svg>
+      <div className="absolute inset-0 grid place-items-center text-center pointer-events-none">
+        <div>
+          <div className="text-2xl font-bold mono" style={{ color: activeSeg?.color ?? C.ink }}>
+            {centerVal.toLocaleString()}
+          </div>
+          <div className="text-xs text-muted">
+            {centerTxt}{pct != null ? ` · ${pct}%` : ""}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
