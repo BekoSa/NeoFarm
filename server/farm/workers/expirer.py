@@ -34,6 +34,10 @@ async def _expire_once() -> tuple[int, int, int]:
     """Returns (expired flags, requeued stale claims, purged runs)."""
     cfg = get_config()
     now = datetime.now(UTC)
+    if cfg.paused:
+        # On a break: never age flags out (the game clock is stopped), but
+        # still purge old run reports — that is disk hygiene, not game state.
+        return 0, 0, await _purge_runs(now, cfg.runs_retention)
     lifetime_cutoff = now - timedelta(seconds=cfg.flag_lifetime)
     pending_cutoff = now - timedelta(
         seconds=max(_PENDING_LEASE_SECONDS, cfg.submitter.period * 5)
@@ -62,15 +66,20 @@ async def _expire_once() -> tuple[int, int, int]:
             .values(status=FlagStatus.EXPIRED)
             .returning(Flag.id)
         )
-        purged = 0
-        if cfg.runs_retention > 0:
-            res = await sess.execute(
-                delete(Run).where(
-                    Run.started_at < now - timedelta(seconds=cfg.runs_retention)
-                )
-            )
-            purged = res.rowcount or 0
-        return len(expired.fetchall()), len(requeued.fetchall()), purged
+        n_expired = len(expired.fetchall())
+        n_requeued = len(requeued.fetchall())
+    return n_expired, n_requeued, await _purge_runs(now, cfg.runs_retention)
+
+
+async def _purge_runs(now: datetime, retention: int) -> int:
+    """Delete run reports older than `retention` seconds (0 keeps all)."""
+    if retention <= 0:
+        return 0
+    async with session_scope() as sess:
+        res = await sess.execute(
+            delete(Run).where(Run.started_at < now - timedelta(seconds=retention))
+        )
+        return res.rowcount or 0
 
 
 async def main() -> None:

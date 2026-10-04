@@ -6,7 +6,7 @@ export type FeedItem = FarmEvent & { at: number; seq: number };
 export type LiveState = "open" | "closed" | "error";
 
 export const EVENT_KINDS = [
-  "submit", "flags", "run", "exploit", "requeue", "expired", "submitter_error",
+  "submit", "flags", "run", "exploit", "requeue", "expired", "submitter_error", "pause",
 ] as const;
 
 /** Subscribe to the live event stream, keeping the most recent `cap` events. */
@@ -36,6 +36,7 @@ const EVENT_STYLE: Record<string, string> = {
   requeue: "bg-yellow-800 text-yellow-100",
   expired: "bg-gray-700 text-gray-200",
   submitter_error: "bg-pink-800 text-pink-100",
+  pause: "bg-orange-800 text-orange-100",
 };
 
 export function EventLabel({ kind }: { kind: string }) {
@@ -61,6 +62,8 @@ export function describe(e: FarmEvent): string {
       return `${p.flags} flag(s) expired`;
     case "submitter_error":
       return `jury gave no verdict for ${p.flags} flag(s): ${p.error ?? "?"}`;
+    case "pause":
+      return p.paused ? "farm paused (break)" : "farm resumed";
     default:
       return JSON.stringify(p);
   }

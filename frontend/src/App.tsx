@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { buildApi, clearProfile, defaultUrl, loadProfile, Profile, saveProfile } from "./api/client";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { buildApi, clearProfile, defaultUrl, FarmConfig, loadProfile, Profile, saveProfile, useApi } from "./api/client";
 import { Dashboard } from "./pages/Dashboard";
 import { Feed } from "./pages/Feed";
 import { Flags } from "./pages/Flags";
@@ -50,6 +51,19 @@ function Shell({
   children: React.ReactNode;
 }) {
   const [showInstall, setShowInstall] = useState(false);
+  const api = useApi(profile);
+  const qc = useQueryClient();
+  const cfg = useQuery({
+    queryKey: ["config", profile.url],
+    queryFn: async () => (await api.get<FarmConfig>("/api/config")).data,
+    refetchInterval: 5_000,
+  });
+  const paused = !!cfg.data?.paused;
+  const pause = useMutation({
+    mutationFn: async (v: boolean) =>
+      (await api.post<{ paused: boolean }>("/api/config/pause", { paused: v })).data,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["config"] }),
+  });
   return (
     <div className="min-h-full">
       <header className="border-b border-border bg-panel">
@@ -72,6 +86,19 @@ function Shell({
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm text-muted">
+            <button
+              onClick={() => pause.mutate(!paused)}
+              disabled={pause.isPending}
+              title={paused ? "Resume submitting flags" : "Pause the farm during a break"}
+              className={
+                "text-xs px-2 py-1 rounded border disabled:opacity-50 " +
+                (paused
+                  ? "border-orange-500 text-orange-200 bg-orange-950 hover:bg-orange-900"
+                  : "border-border hover:bg-panel2")
+              }
+            >
+              {paused ? "▶ Resume" : "⏸ Pause"}
+            </button>
             <LiveBadge profile={profile} />
             <span className="mono">{profile.url}</span>
             <button
@@ -90,6 +117,11 @@ function Shell({
           </div>
         </div>
       </header>
+      {paused && (
+        <div className="bg-orange-900 text-orange-100 text-center text-sm py-1.5 px-4">
+          ⏸ Farm paused — submitter stopped and flags are kept (not expiring). Resume when the break ends.
+        </div>
+      )}
       <main className="max-w-[1400px] mx-auto p-6">{children}</main>
       {showInstall && (
         <InstallModal

@@ -127,6 +127,7 @@ class _RoundPlan:
     """What the farm told us last time; kept when a refresh fails."""
 
     enabled: bool = True
+    paused: bool = False
     round_length: float = 60.0
     flag_format: str = r"[A-Z0-9]{31}="
     targets: list[tuple[str, str]] = field(default_factory=list)
@@ -173,6 +174,7 @@ async def _refresh_plan(
         log.warning("farm refresh failed (%s); reusing the last known config", exc)
         return
     plan.enabled = bool(expl.get("enabled", True))
+    plan.paused = bool(cfg.get("paused", False))
     plan.round_length = float(cfg.get("round_length", plan.round_length))
     plan.flag_format = cfg.get("flag_format", plan.flag_format)
     plan.targets = teams
@@ -268,7 +270,12 @@ async def run(
             )
             budget = timeout if timeout is not None else max(5.0, plan.round_length - 5)
 
-            if not plan.targets:
+            if plan.paused:
+                console.print(
+                    f"[yellow]round {round_idx}[/yellow] farm is paused "
+                    "(break) — skipping"
+                )
+            elif not plan.targets:
                 console.print(
                     "[red]no targets[/red]: configure teams in config.yml or pass --target"
                 )

@@ -125,6 +125,10 @@ class FarmConfig(BaseModel):
     flag_format: str = r"[A-Z0-9]{31}="
     flag_lifetime: int = Field(900, ge=10)
     round_length: int = Field(60, ge=1)
+    # When true the farm is on a break: the submitter stops sending flags to
+    # the jury and the expirer stops ageing flags out, so nothing is lost or
+    # wasted while the game is paused. Flags keep being captured and queued.
+    paused: bool = False
     protocol: str = "dummy"
     protocols: dict[str, dict[str, Any]] = Field(default_factory=dict)
     # Local pre-queue flag check (a plugin under farm/validators/). The

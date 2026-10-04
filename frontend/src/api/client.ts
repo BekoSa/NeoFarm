@@ -119,6 +119,7 @@ export interface FarmConfig {
   flag_format: string;
   flag_lifetime: number;
   round_length: number;
+  paused: boolean;
   protocol: string;
   protocols: Record<string, Record<string, unknown>>;
   flag_validator: string;

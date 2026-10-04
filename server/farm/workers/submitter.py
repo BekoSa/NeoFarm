@@ -147,6 +147,9 @@ async def _apply(rows: list[dict[str, object]]) -> None:
 
 
 async def _tick(cfg: FarmConfig) -> bool:
+    if cfg.paused:
+        # On a break: don't claim or submit anything. Flags stay QUEUED.
+        return False
     batch = await _claim_batch(cfg.submitter.batch_size, cfg.flag_lifetime)
     if not batch:
         return False
@@ -208,8 +211,12 @@ async def main() -> None:
     loop.add_signal_handler(signal.SIGHUP, lambda: (reload_config(), log.info("config reloaded")))
 
     log.info("submitter started")
+    was_paused = False
     while not stop.is_set():
         cfg = get_config()
+        if cfg.paused != was_paused:
+            log.info("submitter %s", "paused" if cfg.paused else "resumed")
+            was_paused = cfg.paused
         try:
             had_work = await _tick(cfg)
         except Exception:

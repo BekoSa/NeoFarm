@@ -45,3 +45,13 @@ def test_errors_are_requeued_not_burned() -> None:
 def test_long_responses_are_truncated() -> None:
     out = plan_updates([(1, "A")], {"A": (FlagVerdict.REJECTED, "x" * 10_000)}, NOW)
     assert len(out.rows[0]["response_value"]) == 4000
+
+
+def test_tick_is_a_noop_when_paused() -> None:
+    import asyncio
+
+    from farm.config import FarmConfig
+    from farm.workers.submitter import _tick
+
+    # paused -> returns False (no work) without ever touching the DB.
+    assert asyncio.run(_tick(FarmConfig(paused=True))) is False
