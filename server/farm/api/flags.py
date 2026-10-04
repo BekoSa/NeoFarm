@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -187,6 +187,22 @@ async def submit_manual(
 
 _LIKE_ESCAPE = str.maketrans({"\\": "\\\\", "%": "\\%", "_": "\\_"})
 
+# Columns the free-text search (`q`) scans — flag body, exploit, team, IP
+# and jury response — all case-insensitive substring matches.
+_SEARCH_COLUMNS = (
+    models.Flag.flag,
+    models.Flag.sploit,
+    models.Flag.team,
+    models.Flag.target_ip,
+    models.Flag.response,
+)
+
+
+def _search_condition(q: str):
+    """A case-insensitive substring match of `q` across the text columns."""
+    pattern = f"%{q.translate(_LIKE_ESCAPE)}%"
+    return or_(*(col.ilike(pattern, escape="\\") for col in _SEARCH_COLUMNS))
+
 
 @router.get("", response_model=list[schemas.FlagOut], dependencies=[Depends(require_token)])
 async def list_flags(
@@ -194,7 +210,10 @@ async def list_flags(
     status: str | None = Query(default=None),
     sploit: str | None = None,
     team: str | None = None,
-    q: str | None = Query(default=None, description="Substring of the flag."),
+    q: str | None = Query(
+        default=None,
+        description="Case-insensitive substring of flag / sploit / team / IP / response.",
+    ),
     limit: int = Query(default=200, le=2000),
     offset: int = 0,
     sess: AsyncSession = Depends(get_session),
@@ -208,7 +227,7 @@ async def list_flags(
     if team:
         conds.append(models.Flag.team == team)
     if q:
-        conds.append(models.Flag.flag.ilike(f"%{q.translate(_LIKE_ESCAPE)}%", escape="\\"))
+        conds.append(_search_condition(q))
 
     total = await sess.scalar(select(func.count()).select_from(models.Flag).where(*conds))
     response.headers["X-Total-Count"] = str(total or 0)
@@ -267,6 +286,8 @@ async def requeue_flags(
         stmt = stmt.where(models.Flag.sploit == payload.sploit)
     if payload.team:
         stmt = stmt.where(models.Flag.team == payload.team)
+    if payload.q:
+        stmt = stmt.where(_search_condition(payload.q))
     requeued = len((await sess.execute(stmt)).fetchall())
     await sess.commit()
     if requeued:

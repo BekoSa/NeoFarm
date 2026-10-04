@@ -271,29 +271,32 @@ function BucketTable({ rows, keyLabel }: { rows: StatsBucket[]; keyLabel: string
         placeholder={`filter ${keyLabel.toLowerCase()}…`}
         className="w-full bg-panel2 border border-border rounded px-2 py-1 mb-2 text-xs"
       />
-      <table className="w-full text-sm">
-        <thead className="text-muted">
-          <tr>
-            <th className="text-left font-medium pb-2">{keyLabel}</th>
-            <th className="text-right font-medium pb-2">accepted</th>
-            <th className="text-right font-medium pb-2">rejected</th>
-            <th className="text-right font-medium pb-2">queued</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.slice(0, 15).map((r) => (
-            <tr key={r.label} className="border-t border-border">
-              <td className="py-1 mono">{r.label}</td>
-              <td className="py-1 mono text-right text-emerald-400">{r.accepted}</td>
-              <td className="py-1 mono text-right text-red-400">{r.rejected}</td>
-              <td className="py-1 mono text-right text-yellow-300">{r.queued}</td>
+      {/* Every row did something (it has flags); show them all, scrolling. */}
+      <div className="max-h-[340px] overflow-auto">
+        <table className="w-full text-sm">
+          <thead className="text-muted sticky top-0 bg-panel">
+            <tr>
+              <th className="text-left font-medium pb-2">{keyLabel}</th>
+              <th className="text-right font-medium pb-2">accepted</th>
+              <th className="text-right font-medium pb-2">rejected</th>
+              <th className="text-right font-medium pb-2">queued</th>
             </tr>
-          ))}
-          {filtered.length === 0 && (
-            <tr><td colSpan={4} className="py-2 text-muted text-xs">no match</td></tr>
-          )}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filtered.map((r) => (
+              <tr key={r.label} className="border-t border-border">
+                <td className="py-1 mono">{r.label}</td>
+                <td className="py-1 mono text-right text-emerald-400">{r.accepted}</td>
+                <td className="py-1 mono text-right text-red-400">{r.rejected}</td>
+                <td className="py-1 mono text-right text-yellow-300">{r.queued}</td>
+              </tr>
+            ))}
+            {filtered.length === 0 && (
+              <tr><td colSpan={4} className="py-2 text-muted text-xs">no match</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

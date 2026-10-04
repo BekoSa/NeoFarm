@@ -47,6 +47,7 @@ class FlagRequeueRequest(BaseModel):
     status: str
     sploit: str | None = None
     team: str | None = None
+    q: str | None = None
 
 
 class FlagRequeueResponse(BaseModel):

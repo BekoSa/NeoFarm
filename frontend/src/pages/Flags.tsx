@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FlagOut, Profile, useApi } from "../api/client";
 import { Card } from "../components/Card";
 import { StatusPill } from "../components/StatusPill";
+import { SearchBar, countLabel } from "../components/SearchBar";
+import { highlight } from "../components/highlight";
 
 const STATUSES = ["", "QUEUED", "PENDING", "ACCEPTED", "REJECTED", "EXPIRED", "DUPLICATE", "ERROR"];
 // Statuses the bulk "requeue matching" action accepts (see POST /api/flags/requeue).
@@ -22,22 +24,17 @@ export function Flags({ profile }: { profile: Profile }) {
   const api = useApi(profile);
   const qc = useQueryClient();
   const [status, setStatus] = useState("");
-  const [sploit, setSploit] = useState("");
-  const [team, setTeam] = useState("");
   const [search, setSearch] = useState("");
-  // Debounce free-form text inputs so typing doesn't fire one request per keystroke.
-  const sploitQuery = useDebounced(sploit, 300);
-  const teamQuery = useDebounced(team, 300);
-  const searchQuery = useDebounced(search, 300);
+  // Debounce the text input so typing doesn't fire one request per keystroke.
+  const searchQuery = useDebounced(search.trim(), 300);
+  const needle = searchQuery.toLowerCase();
   const [notice, setNotice] = useState<string | null>(null);
 
   const flags = useQuery({
-    queryKey: ["flags", profile.url, status, sploitQuery, teamQuery, searchQuery],
+    queryKey: ["flags", profile.url, status, searchQuery],
     queryFn: async () => {
       const params: Record<string, string> = { limit: String(PAGE) };
       if (status) params.status = status;
-      if (sploitQuery) params.sploit = sploitQuery;
-      if (teamQuery) params.team = teamQuery;
       if (searchQuery) params.q = searchQuery;
       const res = await api.get<FlagOut[]>("/api/flags", { params });
       const total = Number(res.headers["x-total-count"] ?? res.data.length);
@@ -51,8 +48,7 @@ export function Flags({ profile }: { profile: Profile }) {
       (
         await api.post<{ requeued: number }>("/api/flags/requeue", {
           status,
-          sploit: sploitQuery || null,
-          team: teamQuery || null,
+          q: searchQuery || null,
         })
       ).data,
     onSuccess: (data) => {
@@ -73,116 +69,108 @@ export function Flags({ profile }: { profile: Profile }) {
   });
 
   return (
-    <Card
-      title="Flags"
-      right={
-        <div className="flex gap-2 text-xs items-center">
-          {notice && <span className="text-emerald-400">{notice}</span>}
-          {flags.data && (
-            <span className="text-muted mono">
-              {flags.data.rows.length < flags.data.total
-                ? `${flags.data.rows.length} of ${flags.data.total}`
-                : flags.data.total}
-            </span>
-          )}
-          {REQUEUEABLE.has(status) && (
-            <button
-              onClick={() => {
-                if (confirm(`Requeue every ${status} flag matching the filters (still within flag_lifetime)?`)) {
-                  requeueMatching.mutate();
-                }
-              }}
-              disabled={requeueMatching.isPending}
-              className="px-2 py-1 rounded border border-border hover:bg-panel2 disabled:opacity-50"
-              title="Send these flags to the jury again — e.g. after fixing the jury token"
-            >
-              requeue matching
-            </button>
-          )}
-          <input
-            placeholder="flag contains…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="bg-panel2 border border-border rounded px-2 py-1 mono w-40"
-          />
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="bg-panel2 border border-border rounded px-2 py-1"
-          >
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s || "any status"}
-              </option>
-            ))}
-          </select>
-          <input
-            placeholder="sploit"
-            value={sploit}
-            onChange={(e) => setSploit(e.target.value)}
-            className="bg-panel2 border border-border rounded px-2 py-1 mono w-32"
-          />
-          <input
-            placeholder="team"
-            value={team}
-            onChange={(e) => setTeam(e.target.value)}
-            className="bg-panel2 border border-border rounded px-2 py-1 mono w-28"
-          />
-        </div>
-      }
-    >
-      <div className="overflow-auto max-h-[68vh]">
-        <table className="w-full text-sm">
-          <thead className="text-muted sticky top-0 bg-panel">
-            <tr>
-              <th className="text-left font-medium py-1">flag</th>
-              <th className="text-left font-medium py-1">status</th>
-              <th className="text-left font-medium py-1">sploit</th>
-              <th className="text-left font-medium py-1">team</th>
-              <th className="text-left font-medium py-1">captured</th>
-              <th className="text-left font-medium py-1">response</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {flags.data?.rows.map((f) => (
-              <tr key={f.id} className="border-t border-border align-top">
-                <td className="py-1 mono">{f.flag}</td>
-                <td className="py-1"><StatusPill status={f.status} /></td>
-                <td className="py-1 mono text-muted">{f.sploit}</td>
-                <td className="py-1 mono text-muted">{f.team || f.target_ip}</td>
-                <td className="py-1 mono text-xs text-muted">
-                  {new Date(f.captured_at).toLocaleTimeString()}
-                </td>
-                <td className="py-1 text-xs text-muted truncate max-w-[300px]">
-                  {f.response}
-                </td>
-                <td className="py-1 text-right whitespace-nowrap">
-                  <button
-                    onClick={() => requeue.mutate(f.id)}
-                    className="text-xs px-2 py-0.5 rounded border border-border hover:bg-panel2 mr-1"
-                  >
-                    requeue
-                  </button>
-                  <button
-                    onClick={() => del.mutate(f.id)}
-                    className="text-xs px-2 py-0.5 rounded border border-border hover:bg-red-900"
-                  >
-                    delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {flags.data && flags.data.rows.length === 0 && (
-              <tr>
-                <td colSpan={7} className="text-muted text-center py-6">
-                  no flags
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+    <div className="grid grid-cols-12 gap-4">
+      <div className="col-span-12">
+        <SearchBar
+          value={search}
+          onChange={setSearch}
+          placeholder="Search flags — flag, sploit, team, IP, response (partial, case-insensitive)"
+        />
       </div>
-    </Card>
+
+      <div className="col-span-12">
+        <Card
+          title="Flags"
+          right={
+            <div className="flex gap-2 text-xs items-center">
+              {notice && <span className="text-emerald-400">{notice}</span>}
+              {flags.data && (
+                <span className="text-muted mono">
+                  {countLabel(flags.data.rows.length, flags.data.total, flags.data.rows.length < flags.data.total)}
+                </span>
+              )}
+              {REQUEUEABLE.has(status) && (
+                <button
+                  onClick={() => {
+                    if (confirm(`Requeue every ${status} flag matching the search (still within flag_lifetime)?`)) {
+                      requeueMatching.mutate();
+                    }
+                  }}
+                  disabled={requeueMatching.isPending}
+                  className="px-2 py-1 rounded border border-border hover:bg-panel2 disabled:opacity-50"
+                  title="Send these flags to the jury again — e.g. after fixing the jury token"
+                >
+                  requeue matching
+                </button>
+              )}
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                className="bg-panel2 border border-border rounded px-2 py-1"
+              >
+                {STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {s || "any status"}
+                  </option>
+                ))}
+              </select>
+            </div>
+          }
+        >
+          <div className="overflow-auto max-h-[68vh]">
+            <table className="w-full text-sm">
+              <thead className="text-muted sticky top-0 bg-panel">
+                <tr>
+                  <th className="text-left font-medium py-1">flag</th>
+                  <th className="text-left font-medium py-1">status</th>
+                  <th className="text-left font-medium py-1">sploit</th>
+                  <th className="text-left font-medium py-1">team</th>
+                  <th className="text-left font-medium py-1">captured</th>
+                  <th className="text-left font-medium py-1">response</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {flags.data?.rows.map((f) => (
+                  <tr key={f.id} className="border-t border-border align-top">
+                    <td className="py-1 mono">{highlight(f.flag, needle)}</td>
+                    <td className="py-1"><StatusPill status={f.status} /></td>
+                    <td className="py-1 mono text-muted">{highlight(f.sploit, needle)}</td>
+                    <td className="py-1 mono text-muted">{highlight(f.team || f.target_ip, needle)}</td>
+                    <td className="py-1 mono text-xs text-muted">
+                      {new Date(f.captured_at).toLocaleTimeString()}
+                    </td>
+                    <td className="py-1 text-xs text-muted truncate max-w-[300px]">
+                      {highlight(f.response, needle)}
+                    </td>
+                    <td className="py-1 text-right whitespace-nowrap">
+                      <button
+                        onClick={() => requeue.mutate(f.id)}
+                        className="text-xs px-2 py-0.5 rounded border border-border hover:bg-panel2 mr-1"
+                      >
+                        requeue
+                      </button>
+                      <button
+                        onClick={() => del.mutate(f.id)}
+                        className="text-xs px-2 py-0.5 rounded border border-border hover:bg-red-900"
+                      >
+                        delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {flags.data && flags.data.rows.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="text-muted text-center py-6">
+                      {searchQuery || status ? "no flags match" : "no flags"}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+    </div>
   );
 }
