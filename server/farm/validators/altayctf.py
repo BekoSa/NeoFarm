@@ -1,24 +1,31 @@
 """Structural validator for AltayCTF flags.
 
-A real jury flag looks like ``alt_eDc3c5bdbdbb5dab6382a150b8``: the prefix
-``alt_`` followed by a fixed-length alphanumeric body. This validator
-drops flags that do not fit that shape — tighter than a permissive
-``flag_format`` regex — plus anything matching a configurable blacklist.
+Measured against this farm's own database (3461 accepted vs 10721 flags the
+jury rejected with ``Invalid Signature``), a real flag is always
+``ALT_`` + exactly 26 lower-case hex chars, e.g.
+``ALT_69cdd49a050c053c703d55b19a`` (13 bytes). This validator enforces that
+shape plus an optional minimum-distinct-characters floor and a blacklist.
 
-It canNOT detect a forgery that copies the format exactly: the jury's
-``Invalid Signature`` verdict comes from a secret-keyed MAC we cannot
-check locally (see ``validators/base.py``). It only removes malformed junk
-before it reaches the queue, so it is a cheap first line, not a guarantee.
+Honest effectiveness (see validators/base.py): 99% of the invalid-signature
+flags were themselves perfect ``ALT_`` + 26-hex strings with high entropy —
+structurally identical to real flags. The jury signature is a secret-keyed
+MAC we cannot reproduce, so those cannot be caught locally. The structural
+rules only drop the ~0.5% of broken/lazy forgeries (non-hex chars, or
+degenerate bodies like ``ALT_00000000000000000000000000``), and they do so
+with zero false positives on the accepted set (whose bodies never had fewer
+than 9 distinct hex chars).
 
 Config (all optional, shown with defaults)::
 
     flag_validator: altayctf
     validators:
       altayctf:
-        prefix: "alt_"
-        body_len: 26          # exact length of the part after the prefix,
-                              # or [min, max]; null disables the length check
-        alphabet: "A-Za-z0-9" # character class allowed in the body
+        prefix: "ALT_"
+        body_len: 26          # exact length after the prefix, or [min, max],
+                              # or null to disable the length check
+        alphabet: "0-9a-f"    # character class allowed in the body
+        min_distinct: 0       # reject a body with fewer than N distinct chars
+                              # (0 disables it; 6-7 is safe — real min was 9)
         blacklist: []         # reject a flag containing any of these substrings
 """
 
@@ -34,7 +41,7 @@ class AltayCtfValidator(BaseValidator):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._prefix = str(kwargs.get("prefix", "alt_"))
+        self._prefix = str(kwargs.get("prefix", "ALT_"))
 
         body_len = kwargs.get("body_len", 26)
         if body_len is None:
@@ -44,8 +51,9 @@ class AltayCtfValidator(BaseValidator):
         else:
             self._min_len = self._max_len = int(body_len)
 
-        alphabet = str(kwargs.get("alphabet", "A-Za-z0-9"))
+        alphabet = str(kwargs.get("alphabet", "0-9a-f"))
         self._body_re = re.compile(f"^[{alphabet}]+$")
+        self._min_distinct = int(kwargs.get("min_distinct", 0))
         self._blacklist = [str(s) for s in (kwargs.get("blacklist") or [])]
 
     def validate(self, flag: str) -> ValidationResult:
@@ -67,5 +75,10 @@ class AltayCtfValidator(BaseValidator):
 
         if not self._body_re.match(body):
             return ValidationResult.reject("body has characters outside the alphabet")
+
+        if self._min_distinct and len(set(body)) < self._min_distinct:
+            return ValidationResult.reject(
+                f"body has {len(set(body))} distinct chars < {self._min_distinct} (likely fake)"
+            )
 
         return ValidationResult.accept()
