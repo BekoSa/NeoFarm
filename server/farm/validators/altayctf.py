@@ -15,6 +15,16 @@ degenerate bodies like ``ALT_00000000000000000000000000``), and they do so
 with zero false positives on the accepted set (whose bodies never had fewer
 than 9 distinct hex chars).
 
+A stronger (but riskier) pattern lives in the body ends. Across 3930 accepted
+flags the body ALWAYS started with "6" and ended with "a"; among the
+signature-rejected flags that held for only 0.3%. Requiring body_prefix "6"
+and body_suffix "a" would therefore drop ~99.7% of forgeries with zero false
+positives *on this snapshot*. It is OFF by default on purpose: those markers
+are inferred, not documented. If "6" is a fixed format nibble they are safe,
+but if it is the high nibble of a timestamp/round counter it will roll over
+mid-game and then this rule drops EVERY real flag. Enable only once you are
+sure the markers are constant, and watch the accepted rate right after.
+
 Config (all optional, shown with defaults)::
 
     flag_validator: altayctf
@@ -27,6 +37,9 @@ Config (all optional, shown with defaults)::
         min_distinct: 0       # reject a body with fewer than N distinct chars
                               # (0 disables it; 6-7 is safe — real min was 9)
         blacklist: []         # reject a flag containing any of these substrings
+        body_prefix: ""       # require the body to start with this (e.g. "6") —
+                              # see the warning above before enabling
+        body_suffix: ""       # require the body to end with this (e.g. "a")
 """
 
 from __future__ import annotations
@@ -55,6 +68,13 @@ class AltayCtfValidator(BaseValidator):
         self._body_re = re.compile(f"^[{alphabet}]+$")
         self._min_distinct = int(kwargs.get("min_distinct", 0))
         self._blacklist = [str(s) for s in (kwargs.get("blacklist") or [])]
+        # Optional fixed format markers at the ends of the body. Observed in
+        # this farm's data: every one of 3930 accepted flags began with "6"
+        # and ended with "a", while that pattern held for only 0.3% of the
+        # signature-rejected ones. Off by default — see the module docstring
+        # for the risk of enabling it mid-game.
+        self._body_prefix = str(kwargs.get("body_prefix", ""))
+        self._body_suffix = str(kwargs.get("body_suffix", ""))
 
     def validate(self, flag: str) -> ValidationResult:
         for bad in self._blacklist:
@@ -80,5 +100,11 @@ class AltayCtfValidator(BaseValidator):
             return ValidationResult.reject(
                 f"body has {len(set(body))} distinct chars < {self._min_distinct} (likely fake)"
             )
+
+        if self._body_prefix and not body.startswith(self._body_prefix):
+            return ValidationResult.reject(f"body does not start with {self._body_prefix!r}")
+
+        if self._body_suffix and not body.endswith(self._body_suffix):
+            return ValidationResult.reject(f"body does not end with {self._body_suffix!r}")
 
         return ValidationResult.accept()

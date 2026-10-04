@@ -60,6 +60,20 @@ def test_altayctf_blacklist_and_length_range() -> None:
     assert not v.validate("ALT_xxdeadbeefxx").ok      # blacklisted substring
 
 
+def test_altayctf_body_markers_are_off_by_default() -> None:
+    # Default validator must not enforce the 6.../...a markers (body still
+    # 26 lowercase-hex, just starting 7 and ending f).
+    v = build_validator("altayctf")
+    assert v.validate("ALT_79cdd49a050c053c703d55b19f").ok
+
+
+def test_altayctf_body_markers_when_enabled() -> None:
+    v = build_validator("altayctf", body_prefix="6", body_suffix="a")
+    assert v.validate(SAMPLE).ok                              # 6...a
+    assert not v.validate("ALT_79cdd49a050c053c703d55b19a").ok  # wrong first nibble
+    assert not v.validate("ALT_69cdd49a050c053c703d55b19f").ok  # wrong last nibble
+
+
 def test_altayctf_length_check_can_be_disabled() -> None:
     v = build_validator("altayctf", body_len=None)
     assert v.validate("ALT_a").ok and v.validate("ALT_" + "abcdef0123" * 20).ok
